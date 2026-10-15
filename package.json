@@ -1,0 +1,43 @@
+{
+  "name": "osu-replay-ghost",
+  "private": true,
+  "version": "3.0.0",
+  "description": "Browser-based osu! stable replay analyzer — time-slice miss diagnosis, multi-replay ghost trail comparison, frame-by-frame K1/K2 playback and aim offset analysis.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/M1zukiqwq/osu-replay-ghost.git"
+  },
+  "homepage": "https://github.com/M1zukiqwq/osu-replay-ghost#readme",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "fixtures": "python3 scripts/make_fixtures.py",
+    "smoke": "vite build && node scripts/smoke.mjs",
+    "perf": "vite build && node scripts/perf.mjs",
+    "screenshot": "vite build && node scripts/screenshot.mjs"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "chart.js": "^4.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "autoprefixer": "^10.6.1",
+    "happy-dom": "^21.0.1",
+    "postcss": "^8.5.30",
+    "puppeteer-core": "^25.14.0",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5"
+  }
+}

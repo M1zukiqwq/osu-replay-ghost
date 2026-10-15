@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+body {
+  background-color: #090c15;
+  color: #e2e8f0;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  overflow-x: hidden;
+}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #0f1422; }
+::-webkit-scrollbar-thumb { background: #2e3b5e; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #ff66aa; }
+
+.slice-bar { transition: transform 0.14s ease, filter 0.14s ease; }
+.slice-bar:hover { transform: translateY(-2px); filter: brightness(1.18); }
+.slice-bar.active-slice {
+  outline: 2px solid #22d3ee;
+  outline-offset: 1px;
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.55);
+}
+
+.key-tile { transition: transform 0.04s ease, background-color 0.04s ease, box-shadow 0.04s ease; }
+.key-tile.pressed-k1 {
+  background: rgba(34, 211, 238, 0.32) !important;
+  border-color: #22d3ee !important;
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.65);
+  transform: scale(0.96);
+}
+.key-tile.pressed-k2 {
+  background: rgba(244, 114, 182, 0.32) !important;
+  border-color: #f472b6 !important;
+  box-shadow: 0 0 12px rgba(244, 114, 182, 0.65);
+  transform: scale(0.96);
+}
+
+#timelineTrackWrapper { position: relative; height: 30px; display: block; user-select: none; }
+#timelineBaseTrack {
+  position: absolute; left: 0; right: 0; top: 10px; height: 10px; border-radius: 9999px;
+  background-color: #1e293b; border: 1px solid #334155; pointer-events: none;
+}
+#scrubberRangeHighlight { position: absolute; top: 10px; height: 10px; border-radius: 9999px; pointer-events: none; z-index: 5; }
+#scrubberPlayhead {
+  position: absolute; top: 4px; width: 3px; height: 22px; margin-left: -1.5px; border-radius: 9999px;
+  background-color: #ffffff; box-shadow: 0 0 8px rgba(34, 211, 238, 0.95); pointer-events: none; z-index: 12;
+}
+#timelineScrubber {
+  position: absolute; top: 0; left: 0; width: 100%; height: 30px; margin: 0; opacity: 0; cursor: pointer; z-index: 15;
+}
+#rangeSelectOverlay {
+  position: absolute; inset: 0; width: 100%; height: 30px; z-index: 20; cursor: crosshair; touch-action: none;
+}
+#rangeSelectOverlay.hidden { display: none !important; }
+#rangeHandleStart, #rangeHandleEnd {
+  position: absolute; top: 3px; width: 12px; height: 24px; margin-left: -6px; border-radius: 4px;
+  cursor: ew-resize; z-index: 25; touch-action: none;
+}
+@media (pointer: coarse) {
+  #rangeHandleStart, #rangeHandleEnd { width: 22px; margin-left: -11px; }
+}
+
+#dropOverlay.hidden { display: none !important; }

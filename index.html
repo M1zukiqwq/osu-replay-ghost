@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>osu! stable Replay Analyzer & Ghost Studio — 本地成绩分片统计与影子轨迹逐帧回放</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+</head>
+<body class="min-h-screen flex flex-col selection:bg-pink-500 selection:text-white">
+
+  <!-- Top Navigation & Directory Binding Bar -->
+  <header class="sticky top-0 z-30 bg-[#0d1220]/95 backdrop-blur border-b border-slate-800/90 px-3 sm:px-5 py-2.5">
+    <div class="max-w-[1760px] mx-auto flex flex-wrap items-center justify-between gap-2.5">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-full bg-gradient-to-br from-pink-500 via-rose-500 to-cyan-400 p-0.5 flex items-center justify-center shadow-lg shadow-pink-500/20">
+          <div class="w-full h-full rounded-full bg-[#0d1220] flex items-center justify-center font-extrabold text-xs tracking-tighter text-pink-400">osu!</div>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-sm sm:text-base font-bold tracking-tight text-white">osu! stable Replay Ghost &amp; Slice Analyzer</h1>
+            <span class="px-2 py-0.5 text-[10px] font-mono font-semibold uppercase rounded-full bg-pink-500/15 text-pink-300 border border-pink-500/30">Local Studio v3.0</span>
+          </div>
+          <p class="text-[11px] text-slate-400 hidden sm:block">本地目录实时扫描 · 按谱面 MD5 聚合 · 时间片 Miss 诊断 · 多 Replay 影子车轨迹与 K1/K2 逐帧回放</p>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <div id="watcherStatusBadge" class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-slate-900/90 border border-slate-700/80 text-xs max-w-[460px]">
+          <span id="watcherDot" class="w-2 h-2 shrink-0 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span id="watcherStatusText" class="text-slate-300 font-medium truncate">内置演示库已就绪 (未绑定本地目录)</span>
+        </div>
+        <button id="pendingBadge" type="button" class="hidden px-2 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs font-semibold" title="查看等待匹配谱面的回放"></button>
+        <div id="watcherActions" class="flex flex-wrap items-center gap-1.5"></div>
+
+        <button id="btnBindOsuDir" type="button" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-pink-600 to-rose-500 hover:from-pink-500 hover:to-rose-400 text-white font-semibold text-xs shadow-md shadow-pink-600/20 transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+          <span>绑定本地 osu! 根目录</span>
+        </button>
+        <input id="fallbackDirInput" type="file" webkitdirectory directory multiple class="hidden" />
+
+        <button id="btnOpenImportModal" type="button" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 font-semibold text-xs transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+          <span>手动导入 .osr / .osu</span>
+        </button>
+
+        <button id="btnSimulateLiveScore" type="button" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 font-medium text-xs transition" title="演示功能：为当前谱面合成一条新回放，模拟打完一张图后被自动导入">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          <span class="hidden md:inline">模拟打完自动导入新成绩</span>
+          <span class="md:hidden">模拟新成绩</span>
+          <span class="px-1 rounded bg-emerald-500/20 text-[9px] font-bold">演示</span>
+        </button>
+
+        <button id="btnClearDemo" type="button" class="hidden px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs transition" title="移除内置演示谱面与所有演示回放">清除演示数据</button>
+
+        <button id="btnToggleAudio" type="button" class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs transition" title="切换打击音效 (Hitsound)">
+          <span id="audioIcon">🔊</span>
+          <span id="audioLabel" class="hidden sm:inline">音效开启</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div id="toastContainer" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm pointer-events-none"></div>
+
+  <main class="flex-1 max-w-[1760px] w-full mx-auto p-3 sm:p-4 grid grid-cols-1 lg:grid-cols-12 gap-4">
+
+    <aside class="lg:col-span-3 flex flex-col gap-3.5 min-w-0">
+      <section class="bg-[#111625] border border-slate-800/90 rounded-xl p-3.5 shadow-lg">
+        <div class="flex items-center justify-between mb-2.5">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-4 rounded-sm bg-pink-500"></span>
+            <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200">谱面分组 (按谱面 MD5)</h2>
+          </div>
+          <span id="beatmapCountBadge" class="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">0 张谱面</span>
+        </div>
+        <div class="relative mb-2.5">
+          <input id="beatmapSearchInput" type="text" placeholder="搜索谱面名称、难度或 Beatmap ID..." class="w-full bg-slate-900/90 border border-slate-700/80 focus:border-pink-500 rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 outline-none transition" />
+          <svg class="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        </div>
+        <div id="beatmapGroupList" class="flex flex-col gap-2 max-h-60 overflow-y-auto pr-0.5"></div>
+      </section>
+
+      <section id="pendingSection" class="hidden bg-[#111625] border border-amber-500/40 rounded-xl p-3.5 shadow-lg">
+        <div class="flex items-center justify-between mb-1.5">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-4 rounded-sm bg-amber-400"></span>
+            <h2 class="text-xs font-bold uppercase tracking-wider text-amber-200">待匹配谱面的回放</h2>
+          </div>
+          <span id="pendingCountBadge" class="text-[11px] font-mono px-2 py-0.5 rounded bg-amber-500/15 text-amber-300">0 条</span>
+        </div>
+        <p class="text-[11px] text-slate-400 mb-2">这些回放对应的谱面还没有加载。请导入对应的 .osu（按下方 MD5 匹配），或绑定包含 osu!.db 的 osu! 根目录。</p>
+        <div id="pendingList" class="flex flex-col gap-1.5 max-h-48 overflow-y-auto pr-0.5"></div>
+      </section>
+
+      <section class="bg-[#111625] border border-slate-800/90 rounded-xl p-3.5 shadow-lg flex-1 flex flex-col">
+        <div class="flex items-center justify-between mb-1.5">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-4 rounded-sm bg-cyan-400"></span>
+            <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200">离散选择 Replay (影子车对比)</h2>
+          </div>
+          <span id="selectedReplayCountBadge" class="text-[11px] font-mono px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">已选 0 / 0 个</span>
+        </div>
+        <p class="text-[11px] text-slate-400 mb-2.5 leading-relaxed">
+          勾选任意多个 Replay 可在同一时间片下叠加<strong class="text-cyan-300">影子车轨迹 (Ghost Car)</strong>并汇总 Miss 与按键数据；点击 <span class="text-amber-300 font-semibold">★ 主视角</span> 切换主控回放。卡片上的 300/100/Miss 为 <span class="text-slate-200 font-semibold">.osr 结算</span>数据。
+        </p>
+        <div class="flex flex-wrap items-center gap-1.5 mb-2.5">
+          <button id="btnSelectAllReplays" type="button" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-200 border border-slate-700 transition">全选本图</button>
+          <button id="btnSelectMissReplays" type="button" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-rose-300 border border-rose-500/30 transition" title="按结算 Miss 数筛选">仅选有 Miss</button>
+          <button id="btnSelectBestVsLatest" type="button" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-cyan-300 border border-cyan-500/30 transition" title="最新一条 vs 结算准确率最高的一条">最佳 vs 最新</button>
+        </div>
+        <div id="replayListContainer" class="flex flex-col gap-2 overflow-y-auto max-h-[420px] pr-0.5"></div>
+      </section>
+    </aside>
+
+    <div class="lg:col-span-9 flex flex-col gap-4 min-w-0">
+
+      <section class="bg-[#111625] border border-slate-800/90 rounded-xl p-3.5 sm:p-4 shadow-lg">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <div class="flex items-center gap-2.5">
+            <span class="w-2.5 h-5 rounded-sm bg-gradient-to-b from-pink-500 to-cyan-400"></span>
+            <div>
+              <div class="flex items-center gap-2">
+                <h2 class="text-sm font-bold text-white">时间片 Miss 与趋势分片图谱</h2>
+                <span id="currentScopeBadge" class="px-2 py-0.5 rounded text-[11px] font-mono font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">当前分析：全图概览</span>
+              </div>
+              <p class="text-[11px] text-slate-400">点击任意 <span id="sliceLenHint" class="text-pink-400 font-semibold">2s 时间片</span> 直接进入该片段逐帧回放与专项分析，或在进度条上自定义挑一段时间区间</p>
+            </div>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="flex items-center gap-1.5 bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-700/80 text-xs">
+              <span class="text-slate-400">分片长度:</span>
+              <select id="sliceDurationSelect" class="bg-transparent text-cyan-300 font-mono font-semibold outline-none cursor-pointer">
+                <option value="1000" class="bg-slate-900">1.0 秒</option>
+                <option value="2000" selected class="bg-slate-900">2.0 秒 (默认)</option>
+                <option value="3000" class="bg-slate-900">3.0 秒</option>
+                <option value="5000" class="bg-slate-900">5.0 秒</option>
+              </select>
+            </div>
+            <button id="btnResetFullMapScope" type="button" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 transition">查看整张图总览</button>
+            <button id="btnJumpWorstSlice" type="button" class="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-xs text-rose-300 border border-rose-500/40 font-semibold transition">⚡ 定位最高 Miss 时间片</button>
+          </div>
+        </div>
+
+        <div class="bg-[#0b0f1a] border border-slate-800 rounded-xl p-3 mb-3">
+          <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400 mb-1.5">
+            <span>时间轴分片 (<span id="sliceTotalCountLabel">0</span> 个分片 · 柱高代表物件密度 · 颜色按模拟判定 · 点击分片切入逐帧回放)</span>
+            <div class="flex items-center gap-3">
+              <span class="flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-sm bg-rose-500 inline-block"></i>有 Miss 分片</span>
+              <span class="flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-sm bg-amber-400 inline-block"></i>100/50 偏移分片</span>
+              <span class="flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-sm bg-emerald-400 inline-block"></i>全连稳定分片</span>
+            </div>
+          </div>
+          <div id="sliceScroll" class="overflow-x-auto pb-1">
+            <div id="timeSliceStrip" class="grid gap-1.5 h-24 items-end pt-3 pb-1 px-1"></div>
+            <div id="timeSliceAxisLabels" class="grid gap-1.5 text-[10px] font-mono text-slate-500 mt-1 px-1"></div>
+          </div>
+        </div>
+
+        <div class="bg-slate-900/75 border border-slate-800 rounded-xl px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 font-semibold">自定义区间分析</span>
+            <span id="customRangeSummaryText" class="text-slate-300 font-mono text-[11px]">当前区间: —</span>
+            <span class="text-slate-400 text-[11px] hidden sm:inline">· 开启「进度条选区间」后，直接在回放进度条上拖拽或拉动左右游标即可实时截取任意时间段</span>
+          </div>
+          <button id="btnTopToggleRangeSelect" type="button" class="px-3 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-400/50 font-semibold text-xs transition flex items-center gap-1.5">
+            <span id="topRangeSelectText">✂ 开启进度条选区间</span>
+          </button>
+        </div>
+      </section>
+
+      <div class="grid grid-cols-1 xl:grid-cols-12 gap-4">
+
+        <section class="xl:col-span-7 bg-[#111625] border border-slate-800/90 rounded-xl p-3.5 shadow-lg flex flex-col min-w-0">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-4 rounded-sm bg-pink-500"></span>
+              <h3 class="text-xs font-bold uppercase tracking-wider text-white">逐帧回放 &amp; 影子车轨迹叠加 (512×384 Playfield)</h3>
+            </div>
+            <div class="flex flex-wrap items-center gap-2 text-[11px]">
+              <label class="flex items-center gap-1 cursor-pointer select-none bg-slate-900 px-2 py-1 rounded border border-slate-700/80 text-cyan-300">
+                <input id="chkShowGhostTrails" type="checkbox" checked class="rounded accent-cyan-400" /><span>影子车轨迹</span>
+              </label>
+              <label class="flex items-center gap-1 cursor-pointer select-none bg-slate-900 px-2 py-1 rounded border border-slate-700/80 text-pink-300">
+                <input id="chkShowKeyMarkers" type="checkbox" checked class="rounded accent-pink-500" /><span>轨迹显示 K1/K2 按下点</span>
+              </label>
+              <label class="flex items-center gap-1 cursor-pointer select-none bg-slate-900 px-2 py-1 rounded border border-slate-700/80 text-amber-300">
+                <input id="chkShowAimVectors" type="checkbox" checked class="rounded accent-amber-400" /><span>圆心落点偏差线</span>
+              </label>
+              <label class="flex items-center gap-1 cursor-pointer select-none bg-slate-900 px-2 py-1 rounded border border-slate-700/80 text-emerald-300">
+                <input id="chkLoopSlice" type="checkbox" checked class="rounded accent-emerald-400" /><span>循环当前时间片</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-stretch">
+            <div class="sm:col-span-9 self-start relative bg-[#070a12] rounded-xl border border-slate-800 overflow-hidden flex items-center justify-center aspect-[4/3] min-w-0">
+              <canvas id="osuPlayfieldCanvas" class="w-full h-full block cursor-crosshair"></canvas>
+              <div class="absolute top-2.5 left-2.5 pointer-events-none flex flex-col gap-1 max-w-[90%]">
+                <div id="canvasBeatmapTitleHud" class="px-2 py-0.5 rounded bg-slate-950/80 border border-slate-800 text-[11px] font-semibold text-white truncate"></div>
+                <div id="canvasFrameMetricsHud" class="px-2 py-0.5 rounded bg-slate-950/80 border border-slate-800 text-[10px] font-mono text-cyan-300"></div>
+              </div>
+              <div class="absolute bottom-2 left-2.5 pointer-events-none flex flex-wrap items-center gap-2 px-2 py-1 rounded bg-slate-950/80 border border-slate-800/90 text-[10px] text-slate-300">
+                <span class="flex items-center gap-1"><i class="w-2 h-2 rounded-full bg-cyan-400 inline-block"></i>K1/M1 按下点</span>
+                <span class="flex items-center gap-1"><i class="w-2 h-2 rounded-full bg-pink-400 inline-block"></i>K2/M2 按下点</span>
+                <span class="flex items-center gap-1"><i class="w-2 h-2 rounded-full bg-rose-500 inline-block"></i>Miss 判定</span>
+              </div>
+            </div>
+
+            <div class="sm:col-span-3 bg-[#0b0f1c] border border-slate-800 rounded-xl p-2.5 flex flex-col justify-between gap-2 min-w-0">
+              <div>
+                <div class="text-[11px] font-bold text-slate-300 mb-1.5 flex items-center justify-between">
+                  <span>实时按键监视 (K1/K2)</span>
+                  <span class="text-[10px] font-mono text-slate-500">Live Key HUD</span>
+                </div>
+                <div id="liveKeyOverlayContainer" class="flex flex-col gap-2 max-h-[310px] overflow-y-auto pr-0.5"></div>
+              </div>
+              <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2 text-[10px] font-mono space-y-1">
+                <div class="text-slate-400 font-sans font-semibold">当前帧主视角状态</div>
+                <div class="flex flex-wrap justify-between gap-x-1"><span class="text-slate-400 whitespace-nowrap">时间 / 帧号:</span><span id="hudCurrentTimeFrame" class="text-white font-semibold ml-auto whitespace-nowrap">—</span></div>
+                <div class="flex flex-wrap justify-between gap-x-1"><span class="text-slate-400 whitespace-nowrap">光标 (X, Y):</span><span id="hudCursorXY" class="text-cyan-300 ml-auto whitespace-nowrap">—</span></div>
+                <div class="flex flex-wrap justify-between gap-x-1"><span class="text-slate-400 whitespace-nowrap">瞬时速度:</span><span id="hudCursorVelocity" class="text-pink-300 ml-auto whitespace-nowrap">—</span></div>
+                <div class="flex flex-wrap justify-between gap-x-1 min-w-0"><span class="text-slate-400 whitespace-nowrap">最近判定:</span><span id="hudNearestJudgment" class="text-emerald-300 truncate ml-auto max-w-full">—</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-3 bg-[#0b0f1a] border border-slate-800 rounded-xl p-3 flex flex-col gap-2.5">
+            <div class="flex flex-col gap-1.5">
+              <div class="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                <div class="flex items-center gap-2">
+                  <button id="btnToggleRangeSelect" type="button" class="px-2.5 py-1 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 font-semibold text-xs transition flex items-center gap-1.5">
+                    <span>✂</span><span id="rangeSelectBtnText">开启进度条选区间</span>
+                  </button>
+                  <span id="rangeSelectModeHint" class="text-slate-400 text-[11px]">点击开启后，直接在下方进度条拖拽框选任意时间段</span>
+                </div>
+                <span id="scrubberSelectedRangeBadge" class="font-mono text-[11px] px-2 py-0.5 rounded bg-slate-900 text-cyan-300 border border-slate-800">区间: —</span>
+              </div>
+              <div class="flex items-center gap-2.5">
+                <span id="timeCurrentLabel" class="text-xs font-mono font-bold text-cyan-300 w-20 text-right">00:00.000</span>
+                <div id="timelineTrackWrapper" class="relative flex-1 select-none">
+                  <div id="timelineBaseTrack"></div>
+                  <div id="scrubberRangeHighlight" class="bg-cyan-400/30 border-x-2 border-cyan-300/75"></div>
+                  <div id="scrubberPlayhead"></div>
+                  <input id="timelineScrubber" type="range" min="0" max="10000" step="1" value="0" aria-label="回放时间进度条" />
+                  <div id="rangeSelectOverlay" class="hidden" title="按住在进度条上左右拖动即可框选区间，或拖动左右游标微调">
+                    <div id="rangeHandleStart" class="bg-cyan-400 hover:bg-cyan-300 border border-slate-950 shadow-md flex items-center justify-center" title="拖动调整区间起点"><span class="w-0.5 h-3 bg-slate-950 rounded"></span></div>
+                    <div id="rangeHandleEnd" class="bg-cyan-300 hover:bg-white border border-slate-950 shadow-md flex items-center justify-center" title="拖动调整区间终点"><span class="w-0.5 h-3 bg-slate-950 rounded"></span></div>
+                  </div>
+                </div>
+                <span id="timeTotalLabel" class="text-xs font-mono text-slate-400 w-20">00:10.000</span>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <button id="btnPlayPause" type="button" class="px-3.5 py-1.5 rounded-lg bg-pink-500 hover:bg-pink-400 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-pink-500/20 transition">
+                  <span id="playPauseIcon">▶</span><span id="playPauseText">播放</span>
+                </button>
+                <button id="btnStepBack10F" type="button" class="px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-xs border border-slate-700 transition" title="后退 10 帧（主视角真实帧，Shift+←）">-10帧</button>
+                <button id="btnStepBack1F" type="button" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 font-mono font-semibold text-xs border border-cyan-500/30 transition" title="逐帧后退 1 帧 (快捷键 ←)">◀ -1帧</button>
+                <button id="btnStepForward1F" type="button" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 font-mono font-semibold text-xs border border-cyan-500/30 transition" title="逐帧前进 1 帧 (快捷键 →)">+1帧 ▶</button>
+                <button id="btnStepForward10F" type="button" class="px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-xs border border-slate-700 transition" title="前进 10 帧（主视角真实帧，Shift+→）">+10帧</button>
+                <button id="btnStepPrevMiss" type="button" class="px-2 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-xs border border-rose-500/30 transition" title="跳到主视角上一个 Miss">⏮ 上个Miss</button>
+                <button id="btnStepNextMiss" type="button" class="px-2 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-xs border border-rose-500/30 transition" title="跳到主视角下一个 Miss">下个Miss ⏭</button>
+              </div>
+              <div class="flex items-center gap-1.5 bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800 text-xs" title="倍速以歌曲时间计：1.0x 即歌曲实际速度（DT/HT 回放的时间戳本身就是歌曲时间）">
+                <span class="text-slate-400">倍速:</span>
+                <button type="button" data-speed="0.1" class="speed-btn px-1.5 py-0.5 rounded font-mono">0.1x</button>
+                <button type="button" data-speed="0.25" class="speed-btn px-1.5 py-0.5 rounded font-mono">0.25x</button>
+                <button type="button" data-speed="0.5" class="speed-btn px-1.5 py-0.5 rounded font-mono">0.5x</button>
+                <button type="button" data-speed="1" class="speed-btn px-1.5 py-0.5 rounded font-mono">1.0x</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="xl:col-span-5 bg-[#111625] border border-slate-800/90 rounded-xl p-3.5 shadow-lg flex flex-col gap-3 min-w-0">
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-4 rounded-sm bg-cyan-400"></span>
+              <h3 class="text-xs font-bold uppercase tracking-wider text-white">当前区间 · 按键与 Aim 趋势诊断</h3>
+              <span class="px-1.5 py-0.5 rounded bg-slate-800 text-[9px] text-slate-400 border border-slate-700 cursor-help" title="Miss / 100 / 50、偏差与打击误差来自本工具的近似模拟判定：只判定圆圈和滑条头（含 notelock、圈外点击可补点、提前 400ms 的 Miss 窗口），转盘不参与，不计滑条尾 / tick，也没有做堆叠偏移。与 .osr 结算数据可能不同。">近似判定</span>
+            </div>
+            <span id="analyticsSliceTimeLabel" class="text-[11px] font-mono text-pink-300">—</span>
+          </div>
+
+          <div class="bg-[#0b0f1c] border border-slate-800 rounded-xl p-3">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold text-slate-200">简明按键统计 (K1 / K2 数量与比例)</span>
+              <span id="kpsBadge" class="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-cyan-300" title="区间内总按键数 / 已选回放数 / 区间秒数">平均 — KPS</span>
+            </div>
+            <div class="grid grid-cols-4 gap-2 mb-2.5">
+              <div class="bg-slate-900/90 border border-cyan-500/30 rounded-lg p-2 text-center">
+                <div class="text-[10px] text-cyan-300 font-semibold">KEY 1 (K1/M1)</div>
+                <div id="statK1Count" class="text-lg font-extrabold font-mono text-white">0</div>
+                <div id="statK1Pct" class="text-[10px] font-mono text-slate-400">—</div>
+              </div>
+              <div class="bg-slate-900/90 border border-pink-500/30 rounded-lg p-2 text-center">
+                <div class="text-[10px] text-pink-300 font-semibold">KEY 2 (K2/M2)</div>
+                <div id="statK2Count" class="text-lg font-extrabold font-mono text-white">0</div>
+                <div id="statK2Pct" class="text-[10px] font-mono text-slate-400">—</div>
+              </div>
+              <div class="bg-slate-900/90 border border-rose-500/30 rounded-lg p-2 text-center min-w-0">
+                <div class="text-[10px] text-rose-300 font-semibold">区间 MISS (模拟)</div>
+                <div id="statSliceMissCount" class="text-lg font-extrabold font-mono text-rose-400">0</div>
+                <div id="statSliceMissReason" class="text-[10px] text-slate-400 truncate">无失误</div>
+              </div>
+              <div class="bg-slate-900/90 border border-amber-500/30 rounded-lg p-2 text-center">
+                <div class="text-[10px] text-amber-300 font-semibold">平均偏差 / UR</div>
+                <div id="statSliceAimOffset" class="text-sm font-extrabold font-mono text-amber-300 mt-0.5">—</div>
+                <div id="statSliceUR" class="text-[10px] font-mono text-slate-400" title="主视角在当前区间内命中判定的 UR（打击误差标准差 × 10）">UR —</div>
+              </div>
+            </div>
+            <div class="w-full h-2.5 rounded-full bg-slate-800 overflow-hidden flex mb-2">
+              <div id="k1RatioBar" class="h-full bg-cyan-400 transition-all duration-300" style="width: 0%"></div>
+              <div id="k2RatioBar" class="h-full bg-pink-500 transition-all duration-300" style="width: 0%"></div>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-[11px] text-left border-collapse">
+                <thead>
+                  <tr class="border-b border-slate-800 text-slate-400">
+                    <th class="py-1 font-medium">已选 Replay</th>
+                    <th class="py-1 font-medium text-right text-cyan-300">K1</th>
+                    <th class="py-1 font-medium text-right text-pink-300">K2</th>
+                    <th class="py-1 font-medium text-right" title="交替次数 / (交替 + 单指)，相邻按键间隔 < 450ms 才计入">双指交替率</th>
+                    <th class="py-1 font-medium text-right text-rose-300">Miss</th>
+                    <th class="py-1 font-medium text-right">Aim偏差</th>
+                  </tr>
+                </thead>
+                <tbody id="perReplayKeyTableBody" class="divide-y divide-slate-800/60 font-mono"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="flex flex-col flex-1 bg-[#0b0f1c] border border-slate-800 rounded-xl p-3">
+            <div class="grid grid-cols-3 gap-1.5 bg-slate-900 p-1 rounded-lg border border-slate-800 mb-3 text-[11px] font-semibold">
+              <button type="button" data-tab="aim" class="detail-tab-btn py-1.5 px-2 rounded-md transition">🎯 Aim 落点与偏差</button>
+              <button type="button" data-tab="tap" class="detail-tab-btn py-1.5 px-2 rounded-md transition">⌨️ 按键误差与按下时长</button>
+              <button type="button" data-tab="trend" class="detail-tab-btn py-1.5 px-2 rounded-md transition">📈 速度与连打间隔趋势</button>
+            </div>
+
+            <div id="tabPanelAim" class="flex-1 flex flex-col justify-between gap-2.5">
+              <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center">
+                <div class="sm:col-span-6 flex flex-col items-center bg-slate-950/80 border border-slate-800/90 rounded-xl p-2">
+                  <div class="text-[10px] text-slate-400 mb-1">相对圆心落点分布 (上=Overaim / 下=Underaim)</div>
+                  <canvas id="aimRadarCanvas" class="w-[180px] h-[180px] block"></canvas>
+                </div>
+                <div class="sm:col-span-6 flex flex-col gap-2 text-xs">
+                  <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2.5">
+                    <div class="flex justify-between text-[11px] text-slate-400 mb-0.5"><span>Overaim (拉过头比例)</span><span id="statOveraimPct" class="font-mono font-bold text-rose-400">—</span></div>
+                    <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden"><div id="barOveraim" class="h-full bg-rose-500" style="width: 0%"></div></div>
+                  </div>
+                  <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2.5">
+                    <div class="flex justify-between text-[11px] text-slate-400 mb-0.5"><span>Underaim (未拉到位比例)</span><span id="statUnderaimPct" class="font-mono font-bold text-amber-400">—</span></div>
+                    <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden"><div id="barUnderaim" class="h-full bg-amber-400" style="width: 0%"></div></div>
+                  </div>
+                  <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2.5 space-y-1 text-[11px]">
+                    <div class="flex justify-between"><span class="text-slate-400">平均距圆心偏差:</span><span id="statMeanRadialError" class="font-mono text-cyan-300 font-semibold">—</span></div>
+                    <div class="flex justify-between"><span class="text-slate-400">参与统计的判定:</span><span id="statEffectiveCount" class="font-mono text-slate-300 font-semibold">0</span></div>
+                  </div>
+                </div>
+              </div>
+              <div id="aimDiagnosticCallout" class="bg-slate-900/95 border border-slate-800 rounded-lg p-2.5 text-[11px] text-slate-300 leading-relaxed"></div>
+            </div>
+
+            <div id="tabPanelTap" class="hidden flex-1 flex flex-col justify-between gap-2.5">
+              <div class="grid grid-cols-3 gap-2 text-center text-[11px]">
+                <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2"><div class="text-slate-400">平均打击偏移</div><div id="statMeanHitError" class="text-sm font-bold font-mono text-cyan-300 mt-0.5">—</div></div>
+                <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2"><div class="text-slate-400">按键按下时长 (K1/K2)</div><div id="statHoldDuration" class="text-sm font-bold font-mono text-pink-300 mt-0.5">—</div></div>
+                <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2"><div class="text-slate-400">双指交替率 (Alt%)</div><div id="statAlternateRatio" class="text-sm font-bold font-mono text-emerald-300 mt-0.5">—</div></div>
+              </div>
+              <div class="relative h-44 bg-slate-950/60 border border-slate-800/80 rounded-xl p-2"><canvas id="tapTimingChart"></canvas></div>
+              <div id="tapDiagnosticCallout" class="bg-slate-900/95 border border-slate-800 rounded-lg p-2 text-[11px] text-slate-300"></div>
+            </div>
+
+            <div id="tabPanelTrend" class="hidden flex-1 flex flex-col justify-between gap-2.5">
+              <div class="grid grid-cols-3 gap-2 text-center text-[11px]">
+                <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2"><div class="text-slate-400">峰值光标速度</div><div id="statPeakVelocity" class="text-sm font-bold font-mono text-pink-300 mt-0.5">—</div></div>
+                <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2"><div class="text-slate-400">平均连打间隔</div><div id="statMeanTapInterval" class="text-sm font-bold font-mono text-cyan-300 mt-0.5">—</div></div>
+                <div class="bg-slate-900/90 border border-slate-800 rounded-lg p-2"><div class="text-slate-400" title="15000 / 平均连打间隔（按 1/4 拍串打折算）">等效连打 BPM</div><div id="statEquivalentBpm" class="text-sm font-bold font-mono text-amber-300 mt-0.5">—</div></div>
+              </div>
+              <div class="relative h-44 bg-slate-950/60 border border-slate-800/80 rounded-xl p-2"><canvas id="velocityTrendChart"></canvas></div>
+              <div id="trendDiagnosticCallout" class="bg-slate-900/95 border border-slate-800 rounded-lg p-2 text-[11px] text-slate-300"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <div id="importModal" class="fixed inset-0 z-50 hidden bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-[#121829] border border-slate-700 rounded-2xl max-w-xl w-full p-5 shadow-2xl max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-5 rounded-sm bg-pink-500"></span>
+          <h3 id="importModalTitle" class="text-base font-bold text-white">导入本地 osu! stable 回放 (.osr) 与谱面 (.osu)</h3>
+        </div>
+        <button id="btnCloseImportModal" type="button" class="text-slate-400 hover:text-white text-sm px-2 py-1 rounded" aria-label="关闭">✕</button>
+      </div>
+      <div class="space-y-4 text-xs text-slate-300">
+        <label for="manualFileInput" id="dropZoneArea" class="border-2 border-dashed border-slate-700 hover:border-pink-500 bg-slate-900/60 rounded-xl p-6 flex flex-col items-center justify-center gap-2 cursor-pointer transition text-center">
+          <svg class="w-9 h-9 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+          <div class="font-semibold text-sm text-white">点击选择或拖入 .osr 回放文件 / .osu 谱面文件 / osu!.db</div>
+          <p class="text-[11px] text-slate-400">支持同时导入多个文件（也可以直接拖到页面任意位置）。回放通过谱面 MD5 与谱面自动关联；osu!.db 用来建立谱面库索引。</p>
+          <input id="manualFileInput" type="file" multiple accept=".osr,.osu,.db" class="hidden" />
+        </label>
+
+        <div id="importResultsSection" class="hidden bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 space-y-2">
+          <div class="font-bold text-slate-200 flex items-center justify-between gap-2">
+            <span>📋 最近一次导入结果</span>
+            <span id="importResultsSummary" class="text-[10px] font-mono text-slate-400"></span>
+          </div>
+          <ul id="importResultsList" class="space-y-1 max-h-56 overflow-y-auto text-[11px]"></ul>
+        </div>
+
+        <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 space-y-2">
+          <div class="font-bold text-slate-200 flex items-center justify-between">
+            <span>💡 绑定本地 osu! 根目录自动监听说明</span>
+            <span class="text-[10px] font-mono text-emerald-400">File System Access API</span>
+          </div>
+          <p class="text-[11px] text-slate-400 leading-relaxed">点击顶部 <strong class="text-pink-300">「绑定本地 osu! 根目录」</strong> 并选择你的 <code class="text-slate-200">osu!</code> 安装文件夹后，本应用会：</p>
+          <ul class="list-disc list-inside text-[11px] text-slate-400 space-y-1">
+            <li>读取 <code class="text-cyan-300">osu!.db</code> 建立「谱面 MD5 → Songs 文件」索引，回放需要哪张谱面就按需从 <code class="text-cyan-300">Songs/</code> 读取哪张；</li>
+            <li>记录 <code class="text-pink-300">Data/r/</code> 与 <code class="text-pink-300">Replays/</code> 中已有的回放作为基线（不会自动导入历史成绩，可用顶栏按钮按需导入），之后每 3 秒检查一次新文件并自动导入；</li>
+            <li>macOS 上 stable 通常位于 <code class="text-slate-200">/Applications/osu!.app/Contents/Resources/drive_c/Program Files/osu!/</code>，选择框里可按 ⌘⇧G 直接输入路径。</li>
+          </ul>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800">
+          <button id="btnDownloadSampleFiles" type="button" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 font-medium text-xs transition">⬇ 生成并下载测试用 .osu + .osr 文件</button>
+          <button id="btnCloseImportModalBottom" type="button" class="px-4 py-1.5 rounded-lg bg-pink-500 hover:bg-pink-400 text-white font-semibold text-xs transition">完成</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="dropOverlay" class="hidden fixed inset-0 z-[60] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+    <div class="border-2 border-dashed border-pink-500 rounded-2xl px-10 py-8 text-center bg-[#121829]/90">
+      <div class="text-lg font-bold text-white">松开以导入</div>
+      <div class="text-xs text-slate-400 mt-1">.osr 回放 / .osu 谱面 / osu!.db</div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
