@@ -2,30 +2,34 @@ import { loadDemo } from '../app/demo';
 import { createEngine } from '../app/engine';
 import { importFiles, summarize, type ImportContext, type ImportOutcome } from '../app/importer';
 import { Library } from '../app/library';
+import { Preview, type PreviewImportKind } from '../app/preview';
 import { state, subscribe, type Topic } from '../app/state';
 import { Watcher } from '../app/watcher';
 import { bindAnalytics, renderAnalytics } from './analytics';
+import { bindDetailBar, renderDetailBar } from './detailBar';
 import { bindImportModal, openImportModal, renderImportResults } from './importModal';
 import { initHeader, renderHeader, type HeaderDeps } from './header';
 import { rebuildKeyCards, renderHud } from './liveHud';
 import { bindPlayer, playbackStep, renderPlayerControls, resetPlaybackClock } from './player';
 import { renderPlayfield, setupCanvas } from './playfield';
 import { bindRangeSelection, renderProgress, renderRangeModeControls } from './rangeSelection';
-import { bindSidebar, renderBeatmapGroups, renderPending, renderReplayList } from './sidebar';
+import { bindSidebar, renderBrowser, renderPending, renderPreviewStatus, renderReplayList } from './sidebar';
 import { bindSlicePanel, renderSlicePanel } from './slicePanel';
 import { showToast } from './toast';
 
-type Part = 'sidebar' | 'slices' | 'analytics' | 'keyCards' | 'playfield' | 'controls' | 'header' | 'importLog';
+type Part = 'browser' | 'sidebar' | 'slices' | 'analytics' | 'keyCards' | 'playfield' | 'controls' | 'header' | 'importLog';
 
 const TOPIC_PARTS: Record<Topic, Part[]> = {
-  groups: ['sidebar', 'slices', 'analytics', 'keyCards', 'playfield', 'header', 'controls'],
+  groups: ['browser', 'sidebar', 'slices', 'analytics', 'keyCards', 'playfield', 'header', 'controls'],
   selection: ['sidebar', 'slices', 'analytics', 'keyCards', 'playfield'],
   scope: ['slices', 'analytics', 'playfield'],
   time: ['playfield'],
   view: ['controls', 'playfield', 'header'],
   tab: ['analytics'],
   playback: ['controls'],
-  watcher: ['header'],
+  watcher: ['header', 'browser'],
+  browser: ['browser'],
+  preview: ['browser', 'sidebar'],
   importLog: ['importLog'],
 };
 
@@ -46,10 +50,11 @@ function frame(ts: number): void {
     dirty.add('playfield');
   } else resetPlaybackClock();
 
+  if (dirty.has('browser')) renderBrowser();
   if (dirty.has('sidebar')) {
-    renderBeatmapGroups();
     renderReplayList();
     renderPending();
+    renderPreviewStatus();
   }
   if (dirty.has('slices')) renderSlicePanel();
   if (dirty.has('analytics')) renderAnalytics();
@@ -64,6 +69,7 @@ function frame(ts: number): void {
     renderPlayfield();
     renderHud();
     renderProgress();
+    renderDetailBar();
   }
   dirty.clear();
   if (state.isPlaying && !raf) raf = requestAnimationFrame(frame);
@@ -81,7 +87,16 @@ export async function startApp(): Promise<void> {
       run: () => openImportModal(true),
     });
   };
-  const watcher = new Watcher(ctx, onImported);
+  const watcher = new Watcher(ctx);
+  // Loading a map's local replays is routine: only failures and new plays get a toast.
+  const onPreviewImported = (o: ImportOutcome, kind: PreviewImportKind) => {
+    const failed = o.report.items.filter((i) => i.status === 'failed').length;
+    const ok = o.report.items.filter((i) => i.status === 'ok').length;
+    const details = { label: '查看明细', run: () => openImportModal(true) };
+    if (kind === 'live' && ok) showToast('新回放已加入当前谱面', summarize(o.report), 'emerald', details);
+    else if (failed) showToast(`${failed} 条本地回放读取失败`, summarize(o.report), 'pink', details);
+  };
+  const preview = new Preview(ctx, watcher, onPreviewImported);
   headerDeps = { engine, watcher, onImported };
 
   setupCanvas();
@@ -91,9 +106,15 @@ export async function startApp(): Promise<void> {
     invalidate(parts);
   });
 
-  bindSidebar();
+  bindSidebar({
+    library: ctx.library,
+    open: (md5) => void preview.open(md5),
+    loadMore: () => void preview.loadMore(),
+    localCount: (md5) => (watcher.hasSource ? watcher.countFor(md5) : null),
+  });
   bindSlicePanel();
   bindRangeSelection();
+  bindDetailBar();
   bindPlayer();
   bindAnalytics();
   bindImportModal(async (files) => {
@@ -105,7 +126,7 @@ export async function startApp(): Promise<void> {
   });
   await initHeader(headerDeps);
 
-  invalidate(['sidebar', 'slices', 'analytics', 'keyCards', 'playfield', 'controls', 'header', 'importLog']);
+  invalidate(['browser', 'sidebar', 'slices', 'analytics', 'keyCards', 'playfield', 'controls', 'header', 'importLog']);
   try {
     await loadDemo(engine);
   } catch (e) {

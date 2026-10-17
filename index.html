@@ -20,7 +20,7 @@
             <h1 class="text-sm sm:text-base font-bold tracking-tight text-white">osu! stable Replay Ghost &amp; Slice Analyzer</h1>
             <span class="px-2 py-0.5 text-[10px] font-mono font-semibold uppercase rounded-full bg-pink-500/15 text-pink-300 border border-pink-500/30">Local Studio v3.0</span>
           </div>
-          <p class="text-[11px] text-slate-400 hidden sm:block">本地目录实时扫描 · 按谱面 MD5 聚合 · 时间片 Miss 诊断 · 多 Replay 影子车轨迹与 K1/K2 逐帧回放</p>
+          <p class="text-[11px] text-slate-400 hidden sm:block">最近游玩实时索引 · 按需读取本地回放 · 时间片 Miss / 断连诊断 · 多 Replay 影子车轨迹与 K1/K2 逐帧回放</p>
         </div>
       </div>
 
@@ -69,15 +69,21 @@
         <div class="flex items-center justify-between mb-2.5">
           <div class="flex items-center gap-2">
             <span class="w-2 h-4 rounded-sm bg-pink-500"></span>
-            <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200">谱面分组 (按谱面 MD5)</h2>
+            <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200">谱面浏览</h2>
           </div>
           <span id="beatmapCountBadge" class="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">0 张谱面</span>
         </div>
-        <div class="relative mb-2.5">
-          <input id="beatmapSearchInput" type="text" placeholder="搜索谱面名称、难度或 Beatmap ID..." class="w-full bg-slate-900/90 border border-slate-700/80 focus:border-pink-500 rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 outline-none transition" />
+        <div class="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800 mb-2 text-[11px] font-semibold">
+          <button type="button" data-browser-tab="recent" class="browser-tab-btn py-1 rounded-md transition" title="Data/r 中最近有本地成绩的谱面（只看文件名，不读取回放）">最近游玩</button>
+          <button type="button" data-browser-tab="search" class="browser-tab-btn py-1 rounded-md transition" title="在 osu!.db 与已加载谱面中搜索">搜索</button>
+          <button type="button" data-browser-tab="loaded" class="browser-tab-btn py-1 rounded-md transition" title="当前内存中的谱面：演示、手动导入和最近打开的谱面">已加载</button>
+        </div>
+        <div class="relative mb-2">
+          <input id="beatmapSearchInput" type="text" placeholder="Beatmap ID / 谱面集 ID / 链接 / MD5 / 关键词…" class="w-full bg-slate-900/90 border border-slate-700/80 focus:border-pink-500 rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 outline-none transition" />
           <svg class="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
         </div>
-        <div id="beatmapGroupList" class="flex flex-col gap-2 max-h-60 overflow-y-auto pr-0.5"></div>
+        <p id="browserHint" class="text-[11px] text-slate-500 mb-2 leading-relaxed"></p>
+        <div id="beatmapGroupList" class="flex flex-col gap-2 max-h-72 overflow-y-auto pr-0.5"></div>
       </section>
 
       <section id="pendingSection" class="hidden bg-[#111625] border border-amber-500/40 rounded-xl p-3.5 shadow-lg">
@@ -103,6 +109,10 @@
         <p class="text-[11px] text-slate-400 mb-2.5 leading-relaxed">
           勾选任意多个 Replay 可在同一时间片下叠加<strong class="text-cyan-300">影子车轨迹 (Ghost Car)</strong>并汇总 Miss 与按键数据；点击 <span class="text-amber-300 font-semibold">★ 主视角</span> 切换主控回放。卡片上的 300/100/Miss 为 <span class="text-slate-200 font-semibold">.osr 结算</span>数据。
         </p>
+        <div id="previewStatus" class="hidden flex flex-wrap items-center justify-between gap-1.5 mb-2.5 px-2 py-1.5 rounded-lg bg-slate-900/80 border border-slate-800 text-[11px]">
+          <span id="previewStatusText" class="text-slate-300 min-w-0"></span>
+          <button id="btnPreviewLoadMore" type="button" class="hidden px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 transition shrink-0"></button>
+        </div>
         <div class="flex flex-wrap items-center gap-1.5 mb-2.5">
           <button id="btnSelectAllReplays" type="button" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-200 border border-slate-700 transition">全选本图</button>
           <button id="btnSelectMissReplays" type="button" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-rose-300 border border-rose-500/30 transition" title="按结算 Miss 数筛选">仅选有 Miss</button>
@@ -137,7 +147,7 @@
               </select>
             </div>
             <button id="btnResetFullMapScope" type="button" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 transition">查看整张图总览</button>
-            <button id="btnJumpWorstSlice" type="button" class="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-xs text-rose-300 border border-rose-500/40 font-semibold transition">⚡ 定位最高 Miss 时间片</button>
+            <button id="btnJumpWorstSlice" type="button" class="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-xs text-rose-300 border border-rose-500/40 font-semibold transition" title="Miss 最多的时间片；Miss 相同时看滑条断连">⚡ 定位最高 Miss 时间片</button>
           </div>
         </div>
 
@@ -146,6 +156,7 @@
             <span>时间轴分片 (<span id="sliceTotalCountLabel">0</span> 个分片 · 柱高代表物件密度 · 颜色按模拟判定 · 点击分片切入逐帧回放)</span>
             <div class="flex items-center gap-3">
               <span class="flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-sm bg-rose-500 inline-block"></i>有 Miss 分片</span>
+              <span class="flex items-center gap-1" title="滑条头、tick 或折返没跟住而断 combo，但整条滑条不是 Miss"><i class="w-2.5 h-2.5 rounded-sm bg-orange-500 inline-block"></i>滑条断连分片</span>
               <span class="flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-sm bg-amber-400 inline-block"></i>100/50 偏移分片</span>
               <span class="flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-sm bg-emerald-400 inline-block"></i>全连稳定分片</span>
             </div>
@@ -249,6 +260,28 @@
                 </div>
                 <span id="timeTotalLabel" class="text-xs font-mono text-slate-400 w-20">00:10.000</span>
               </div>
+              <div class="flex items-center gap-2.5">
+                <span id="detailStartLabel" class="text-[10px] font-mono text-slate-500 w-20 text-right">—</span>
+                <div id="detailTrack" class="relative flex-1 select-none">
+                  <div id="detailBaseTrack"></div>
+                  <div id="detailScopeHighlight"></div>
+                  <canvas id="detailCanvas"></canvas>
+                  <div id="detailSelection" class="hidden"></div>
+                  <div id="detailPlayhead"></div>
+                  <div id="detailHandleStart" class="bg-cyan-400 hover:bg-cyan-300 border border-slate-950 shadow-md flex items-center justify-center" title="拖动微调区间起点"><span class="w-0.5 h-3 bg-slate-950 rounded"></span></div>
+                  <div id="detailHandleEnd" class="bg-cyan-300 hover:bg-white border border-slate-950 shadow-md flex items-center justify-center" title="拖动微调区间终点"><span class="w-0.5 h-3 bg-slate-950 rounded"></span></div>
+                </div>
+                <span id="detailEndLabel" class="text-[10px] font-mono text-slate-500 w-20">—</span>
+              </div>
+              <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] sm:pl-[5.625rem]">
+                <span class="text-slate-400">
+                  区间细分条：点击跳转，拖动框选子区间放大，拖手柄微调起止点 ·
+                  <span class="whitespace-nowrap"><i class="inline-block w-0.5 h-2.5 bg-rose-500 align-middle"></i> Miss</span>
+                  <span class="whitespace-nowrap"><i class="inline-block w-0.5 h-2.5 bg-orange-400 align-middle"></i> 断连</span>
+                  <span class="whitespace-nowrap"><i class="inline-block w-0.5 h-2.5 bg-amber-400 align-middle"></i> 100/50</span>
+                </span>
+                <button id="btnScopeBack" type="button" class="hidden px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 transition shrink-0"></button>
+              </div>
             </div>
 
             <div class="flex flex-wrap items-center justify-between gap-2">
@@ -260,8 +293,8 @@
                 <button id="btnStepBack1F" type="button" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 font-mono font-semibold text-xs border border-cyan-500/30 transition" title="逐帧后退 1 帧 (快捷键 ←)">◀ -1帧</button>
                 <button id="btnStepForward1F" type="button" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 font-mono font-semibold text-xs border border-cyan-500/30 transition" title="逐帧前进 1 帧 (快捷键 →)">+1帧 ▶</button>
                 <button id="btnStepForward10F" type="button" class="px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-xs border border-slate-700 transition" title="前进 10 帧（主视角真实帧，Shift+→）">+10帧</button>
-                <button id="btnStepPrevMiss" type="button" class="px-2 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-xs border border-rose-500/30 transition" title="跳到主视角上一个 Miss">⏮ 上个Miss</button>
-                <button id="btnStepNextMiss" type="button" class="px-2 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-xs border border-rose-500/30 transition" title="跳到主视角下一个 Miss">下个Miss ⏭</button>
+                <button id="btnStepPrevMiss" type="button" class="px-2 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-xs border border-rose-500/30 transition" title="跳到主视角上一个 Miss 或滑条断连">⏮ 上个Miss</button>
+                <button id="btnStepNextMiss" type="button" class="px-2 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-xs border border-rose-500/30 transition" title="跳到主视角下一个 Miss 或滑条断连">下个Miss ⏭</button>
               </div>
               <div class="flex items-center gap-1.5 bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800 text-xs" title="倍速以歌曲时间计：1.0x 即歌曲实际速度（DT/HT 回放的时间戳本身就是歌曲时间）">
                 <span class="text-slate-400">倍速:</span>
@@ -279,7 +312,7 @@
             <div class="flex items-center gap-2">
               <span class="w-2 h-4 rounded-sm bg-cyan-400"></span>
               <h3 class="text-xs font-bold uppercase tracking-wider text-white">当前区间 · 按键与 Aim 趋势诊断</h3>
-              <span class="px-1.5 py-0.5 rounded bg-slate-800 text-[9px] text-slate-400 border border-slate-700 cursor-help" title="Miss / 100 / 50、偏差与打击误差来自本工具的近似模拟判定：只判定圆圈和滑条头（含 notelock、圈外点击可补点、提前 400ms 的 Miss 窗口），转盘不参与，不计滑条尾 / tick，也没有做堆叠偏移。与 .osr 结算数据可能不同。">近似判定</span>
+              <span class="px-1.5 py-0.5 rounded bg-slate-800 text-[9px] text-slate-400 border border-slate-700 cursor-help" title="Miss / 断连 / 100 / 50、偏差与打击误差来自本工具的近似模拟判定：圆圈和滑条头带 notelock、圈外点击可补点、提前 400ms 的 Miss 窗口；滑条按 stable 规则模拟跟随圈（2.4 倍半径）、tick、折返和提前 36ms 的滑条尾，按命中比例给 300/100/50；转盘不参与，也没有做堆叠偏移。与 .osr 结算数据可能不同。">近似判定</span>
             </div>
             <span id="analyticsSliceTimeLabel" class="text-[11px] font-mono text-pink-300">—</span>
           </div>
@@ -302,7 +335,10 @@
               </div>
               <div class="bg-slate-900/90 border border-rose-500/30 rounded-lg p-2 text-center min-w-0">
                 <div class="text-[10px] text-rose-300 font-semibold">区间 MISS (模拟)</div>
-                <div id="statSliceMissCount" class="text-lg font-extrabold font-mono text-rose-400">0</div>
+                <div class="flex items-baseline justify-center gap-1.5">
+                  <span id="statSliceMissCount" class="text-lg font-extrabold font-mono text-rose-400">0</span>
+                  <span id="statSliceBreakCount" class="text-[11px] font-bold font-mono text-orange-300" title="滑条断连：滑条头、tick 或折返没跟住而断 combo，单独计数，不算 Miss"></span>
+                </div>
                 <div id="statSliceMissReason" class="text-[10px] text-slate-400 truncate">无失误</div>
               </div>
               <div class="bg-slate-900/90 border border-amber-500/30 rounded-lg p-2 text-center">
@@ -324,6 +360,7 @@
                     <th class="py-1 font-medium text-right text-pink-300">K2</th>
                     <th class="py-1 font-medium text-right" title="交替次数 / (交替 + 单指)，相邻按键间隔 < 450ms 才计入">双指交替率</th>
                     <th class="py-1 font-medium text-right text-rose-300">Miss</th>
+                    <th class="py-1 font-medium text-right text-orange-300" title="滑条断连（不计入 Miss）">断连</th>
                     <th class="py-1 font-medium text-right">Aim偏差</th>
                   </tr>
                 </thead>

@@ -96,9 +96,13 @@ export function renderHud(): void {
   const jEl = $('hudNearestJudgment');
   const near = pri ? nearestJudgment(pri.analysis.judgments, t) : null;
   if (near) {
-    jEl.textContent = `${near.judgment} (${near.radialOffset.toFixed(1)}px / ${near.keyUsed ?? '无按键'})`;
-    jEl.className = near.judgment === 'MISS' ? 'text-rose-400 font-bold truncate ml-auto max-w-full' : 'text-emerald-300 font-semibold truncate ml-auto max-w-full';
-    jEl.title = near.missReason;
+    const brk = near.judgment !== 'MISS' ? near.slider?.break ?? null : null;
+    const parts = near.slider && near.judgment !== 'MISS' ? ` · 滑条 ${near.slider.hitParts}/${near.slider.totalParts}` : '';
+    jEl.textContent = `${near.judgment}${brk ? ' 断连' : ''} (${near.radialOffset.toFixed(1)}px / ${near.keyUsed ?? '无按键'})${parts}`;
+    jEl.className = near.judgment === 'MISS'
+      ? 'text-rose-400 font-bold truncate ml-auto max-w-full'
+      : brk ? 'text-orange-300 font-bold truncate ml-auto max-w-full' : 'text-emerald-300 font-semibold truncate ml-auto max-w-full';
+    jEl.title = brk ? brk.reason : near.missReason || (near.slider?.checks.find((c) => !c.hit)?.reason ?? '');
   } else {
     jEl.textContent = pri ? '移动中' : DASH;
     jEl.className = 'text-slate-400 truncate ml-auto max-w-full';

@@ -1,6 +1,6 @@
 import type { Beatmap } from '../types';
 import type { AnalyzedReplay } from './metrics';
-import { isEffective } from './metrics';
+import { isEffective, isSliderBreak } from './metrics';
 import { sliceCount, sliceIndexOf } from './scope';
 
 export interface SliceStat {
@@ -9,6 +9,8 @@ export interface SliceStat {
   endMs: number;
   noteCount: number;
   misses: number;
+  /** Sliders that broke combo without being a miss; bucketed by the slider's start like every judgement. */
+  sliderBreaks: number;
   c100: number;
   c50: number;
   meanDeviation: number | null;
@@ -26,7 +28,7 @@ export function computeSlices(beatmap: Beatmap, selected: AnalyzedReplay[], slic
   for (let i = 0; i < n; i++) {
     stats.push({
       index: i, startMs: i * sliceLen, endMs: Math.min((i + 1) * sliceLen, d),
-      noteCount: 0, misses: 0, c100: 0, c50: 0, meanDeviation: null, k1: 0, k2: 0,
+      noteCount: 0, misses: 0, sliderBreaks: 0, c100: 0, c50: 0, meanDeviation: null, k1: 0, k2: 0,
     });
   }
   for (const o of beatmap.hitObjects) {
@@ -40,6 +42,7 @@ export function computeSlices(beatmap: Beatmap, selected: AnalyzedReplay[], slic
       if (j.judgment === 'MISS') stats[i].misses++;
       else if (j.judgment === '100') stats[i].c100++;
       else if (j.judgment === '50') stats[i].c50++;
+      if (isSliderBreak(j)) stats[i].sliderBreaks++;
       devSum[i] += j.radialOffset;
       devCount[i]++;
     }
@@ -54,9 +57,11 @@ export function computeSlices(beatmap: Beatmap, selected: AnalyzedReplay[], slic
   return stats;
 }
 
-/** Slice with the most misses; ties go to the earliest. */
+/** Slice with the most misses, then the most slider breaks; ties go to the earliest. */
 export function worstSlice(stats: SliceStat[]): SliceStat | null {
   let worst: SliceStat | null = null;
-  for (const s of stats) if (!worst || s.misses > worst.misses) worst = s;
+  for (const s of stats) {
+    if (!worst || s.misses > worst.misses || (s.misses === worst.misses && s.sliderBreaks > worst.sliderBreaks)) worst = s;
+  }
   return worst;
 }

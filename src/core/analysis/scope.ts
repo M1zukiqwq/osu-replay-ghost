@@ -29,6 +29,15 @@ export function sliceIndexOf(t: number, sliceLen: number, durationMs: number): n
   return Math.min(Math.floor(t / sliceLen), sliceCount(durationMs, sliceLen) - 1);
 }
 
+export const DETAIL_PAD_RATIO = 0.1;
+export const DETAIL_PAD_MIN_MS = 100;
+
+/** Window of the detail bar: the scope plus a margin on each side (so its edges can be pulled outward), within the map. */
+export function detailFrame(scope: Pick<Scope, 'startMs' | 'endMs'>, durationMs: number): { startMs: number; endMs: number } {
+  const pad = Math.max(DETAIL_PAD_MIN_MS, (scope.endMs - scope.startMs) * DETAIL_PAD_RATIO);
+  return { startMs: Math.max(0, scope.startMs - pad), endMs: Math.min(durationMs, scope.endMs + pad) };
+}
+
 /** Enforces invariant 3: 0 <= start < end <= duration, custom scopes >= 200 ms. */
 export function clampScope(scope: Scope, durationMs: number): Scope {
   const minLen = scope.type === 'custom' ? Math.min(MIN_CUSTOM_SCOPE_MS, durationMs) : 1;

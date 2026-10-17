@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseOsu } from '../src/core/formats/osu';
+import type { DbBeatmapEntry } from '../src/core/formats/osudb';
 import { buildFrames } from '../src/core/replay/frames';
 import type { Beatmap, Frame } from '../src/core/types';
 
@@ -35,6 +36,15 @@ export function osuText(o: MapOpts): string {
 
 export function map(o: MapOpts): Beatmap {
   return parseOsu(new TextEncoder().encode(osuText(o)));
+}
+
+/** An osu!.db entry with empty metadata unless given. */
+export function dbEntry(e: Partial<DbBeatmapEntry> & Pick<DbBeatmapEntry, 'md5' | 'folder' | 'fileName'>): DbBeatmapEntry {
+  return {
+    beatmapId: null, beatmapSetId: null, artist: '', artistUnicode: '', title: '', titleUnicode: '', creator: '', version: '',
+    source: '', tags: '', mode: 0, rankedStatus: null, cs: null, ar: null, od: null, hp: null, stars: null,
+    totalTimeMs: null, objectCount: null, lastPlayedAt: null, modifiedAt: null, ...e,
+  };
 }
 
 /** Frames from (time, x, y, keys) tuples, in beatmap coordinates (no placeholders, NM). */

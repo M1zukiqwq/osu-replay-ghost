@@ -1,4 +1,5 @@
 import { COMBO_COLORS, getActiveGroup, getPrimaryReplay, getSelectedReplays, replayColor, state } from '../app/state';
+import { FOLLOW_RADIUS_SCALE } from '../core/analysis/slider';
 import { effectiveDifficulty } from '../core/beatmap/difficulty';
 import { objectPositionAt } from '../core/formats/osu';
 import { lowerBoundFrames, sampleCursor } from '../core/replay/frames';
@@ -21,6 +22,9 @@ const VECTOR_AFTER_MS = 550;
 const K1_COLOR = '#22d3ee';
 const K2_COLOR = '#f472b6';
 const MISS_COLOR = '#f43f5e';
+const BREAK_COLOR = '#fb923c';
+const CHECK_LABEL = { tick: 'tick', repeat: '折返', tail: '滑条尾' } as const;
+const CAUSE_LABEL = { released: '松键', outside: '出跟随圈', lost: '没跟上', noCursor: '' } as const;
 
 const sx = (x: number) => PAD_X + x * SCALE;
 const sy = (y: number) => PAD_Y + y * SCALE;
@@ -202,17 +206,19 @@ function drawVectors(c: CanvasRenderingContext2D, judgments: Judgment[], t: numb
     const j = judgments[i];
     if (j.judgment === 'SKIP') continue;
     const miss = j.judgment === 'MISS';
+    const headBreak = !miss && j.slider !== null && !j.slider.headHit;
+    const color = miss ? MISS_COLOR : headBreak ? BREAK_COLOR : '#fbbf24';
     const nx = sx(j.noteX);
     const ny = sy(j.noteY);
     const hx = sx(j.hitX);
     const hy = sy(j.hitY);
-    c.strokeStyle = miss ? MISS_COLOR : '#fbbf24';
+    c.strokeStyle = color;
     c.lineWidth = 2;
     c.beginPath();
     c.moveTo(nx, ny);
     c.lineTo(hx, hy);
     c.stroke();
-    c.fillStyle = miss ? MISS_COLOR : '#fbbf24';
+    c.fillStyle = color;
     c.beginPath();
     c.arc(hx, hy, 4.5, 0, Math.PI * 2);
     c.fill();
@@ -221,12 +227,74 @@ function drawVectors(c: CanvasRenderingContext2D, judgments: Judgment[], t: numb
     if (miss) {
       c.fillStyle = MISS_COLOR;
       c.fillText('✕ MISS', hx, hy - 12);
+    } else if (headBreak) {
+      c.fillText('✕ 断连 · 滑条头', hx, hy - 12);
     } else {
       c.fillStyle = j.judgment === '300' ? K1_COLOR : '#fbbf24';
       const err = j.timeError ?? 0;
-      c.fillText(`${j.judgment} (${err >= 0 ? '+' : ''}${Math.round(err)}ms)`, hx, hy - 12);
+      const parts = j.slider && j.slider.hitParts < j.slider.totalParts ? ` ${j.slider.hitParts}/${j.slider.totalParts}` : '';
+      c.fillText(`${j.judgment} (${err >= 0 ? '+' : ''}${Math.round(err)}ms)${parts}`, hx, hy - 12);
     }
   }
+}
+
+/**
+ * Dropped slider checks around t, drawn above the cursors: ✕ at the ball, a dashed line to where the cursor
+ * was, and at the combo break the follow circle plus a label with the cause.
+ */
+function drawSliderChecks(c: CanvasRenderingContext2D, judgments: Judgment[], t: number, maxDuration: number, radius: number): void {
+  const from = lowerBy(judgments, t - VECTOR_AFTER_MS - maxDuration, (j) => j.noteTime);
+  const follow = radius * FOLLOW_RADIUS_SCALE * SCALE;
+  c.save();
+  c.textBaseline = 'middle';
+  c.textAlign = 'center';
+  for (let i = from; i < judgments.length && judgments[i].noteTime <= t + VECTOR_BEFORE_MS; i++) {
+    const s = judgments[i].slider;
+    if (!s || judgments[i].judgment === 'MISS') continue;
+    for (const k of s.checks) {
+      if (k.hit || k.time < t - VECTOR_AFTER_MS || k.time > t + VECTOR_BEFORE_MS) continue;
+      const isBreak = s.break !== null && s.break.time === k.time;
+      const bx = sx(k.x);
+      const by = sy(k.y);
+      c.strokeStyle = BREAK_COLOR;
+      if (isBreak) {
+        c.globalAlpha = 0.55;
+        c.lineWidth = 1.5;
+        c.setLineDash([4, 4]);
+        c.beginPath();
+        c.arc(bx, by, follow, 0, Math.PI * 2);
+        c.stroke();
+        c.globalAlpha = 1;
+      }
+      c.lineWidth = 1.5;
+      c.setLineDash([3, 3]);
+      c.beginPath();
+      c.moveTo(bx, by);
+      c.lineTo(sx(k.cursorX), sy(k.cursorY));
+      c.stroke();
+      c.setLineDash([]);
+      c.lineWidth = 2.5;
+      c.beginPath();
+      c.moveTo(bx - 5, by - 5);
+      c.lineTo(bx + 5, by + 5);
+      c.moveTo(bx + 5, by - 5);
+      c.lineTo(bx - 5, by + 5);
+      c.stroke();
+
+      // Later drops on a broken slider usually follow from the break; only the break (or a lone tail) is labelled.
+      if (!isBreak && s.break !== null) continue;
+      const cause = k.cause ? CAUSE_LABEL[k.cause] : '';
+      const text = `${isBreak ? '✕ 断连' : '漏'} · ${CHECK_LABEL[k.kind]}${cause ? `（${cause}）` : ''}`;
+      c.font = `${isBreak ? 'bold ' : ''}11px "JetBrains Mono", monospace`;
+      const w = c.measureText(text).width + 10;
+      const ly = by - radius * SCALE - 14;
+      c.fillStyle = 'rgba(7, 10, 18, 0.85)';
+      c.fillRect(bx - w / 2, ly - 8, w, 16);
+      c.fillStyle = BREAK_COLOR;
+      c.fillText(text, bx, ly);
+    }
+  }
+  c.restore();
 }
 
 function drawPresses(c: CanvasRenderingContext2D, presses: KeyPress[], t: number, isPri: boolean): void {
@@ -317,4 +385,5 @@ export function renderPlayfield(): void {
     c.fillText(rep.playerName.replace(/^LocalPlayer /, ''), cx + 13, cy + 4);
     c.restore();
   }
+  if (state.showAimVectors && primary) drawSliderChecks(c, primary.analysis.judgments, t, cacheFor(map).maxDuration, eff.radius);
 }

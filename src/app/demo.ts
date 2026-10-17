@@ -15,7 +15,7 @@ function maxComboOf(judgments: Judgment[]): number {
   let cur = 0;
   for (const j of judgments) {
     if (j.judgment === 'SKIP') continue;
-    if (j.judgment === 'MISS') cur = 0;
+    if (j.judgment === 'MISS' || j.slider?.break) cur = 0;
     else best = Math.max(best, ++cur);
   }
   return best;

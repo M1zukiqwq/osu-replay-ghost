@@ -37,6 +37,7 @@ export function currentSlices(): SliceStat[] {
 function barClass(s: SliceStat): string {
   if (s.misses >= 2) return 'bg-rose-500/90 hover:bg-rose-400 border-rose-300';
   if (s.misses === 1) return 'bg-rose-500/70 hover:bg-rose-400 border-rose-400/70';
+  if (s.sliderBreaks > 0) return 'bg-orange-500/80 hover:bg-orange-400 border-orange-300/70';
   if (s.c100 + s.c50 > 0) return 'bg-amber-400/80 hover:bg-amber-300 border-amber-300/70';
   return 'bg-emerald-500/75 hover:bg-emerald-400 border-emerald-400/50';
 }
@@ -57,10 +58,11 @@ function buildBars(slices: SliceStat[]): void {
         type: 'button',
         class: `slice-bar relative w-full rounded-t-md border-t flex flex-col items-center justify-between p-0.5 cursor-pointer overflow-hidden ${barClass(s)}`,
         style: { height: `${Math.max(22, Math.round((s.noteCount / maxNotes) * 100))}%` },
-        title: `${len} 时间片 #${s.index + 1} (${secs(s.startMs, 1)} - ${secs(s.endMs, 1)})\n物件: ${s.noteCount} | Miss: ${s.misses} | 100: ${s.c100} | 50: ${s.c50}\nK1: ${s.k1} / K2: ${s.k2} | 平均偏差: ${num(s.meanDeviation, 1, 'px')}`,
+        title: `${len} 时间片 #${s.index + 1} (${secs(s.startMs, 1)} - ${secs(s.endMs, 1)})\n物件: ${s.noteCount} | Miss: ${s.misses} | 滑条断连: ${s.sliderBreaks} | 100: ${s.c100} | 50: ${s.c50}\nK1: ${s.k1} / K2: ${s.k2} | 平均偏差: ${num(s.meanDeviation, 1, 'px')}`,
         on: { click: () => selectSlice(s.index) },
       },
-      h('span', { class: 'text-[10px] font-mono font-extrabold text-white drop-shadow leading-none' }, s.misses > 0 ? `${s.misses}M` : ''),
+      h('span', { class: 'text-[10px] font-mono font-extrabold text-white drop-shadow leading-none' },
+        s.misses > 0 ? `${s.misses}M` : s.sliderBreaks > 0 ? `${s.sliderBreaks}断` : ''),
       h('span', { class: 'text-[9px] font-mono text-slate-950 font-bold leading-none' }, `#${s.index + 1}`),
     );
     return btn;
@@ -102,7 +104,7 @@ export function bindSlicePanel(): void {
   });
   $('btnResetFullMapScope').addEventListener('click', () => showFullMap());
   $('btnJumpWorstSlice').addEventListener('click', () => {
-    if (!jumpToWorstSlice()) showToast('没有 Miss', '已选回放在整张图上都没有模拟 Miss，已定位到第 1 个分片', 'cyan');
+    if (!jumpToWorstSlice()) showToast('没有 Miss', '已选回放在整张图上都没有模拟 Miss 或滑条断连，已定位到第 1 个分片', 'cyan');
     requestAnimationFrame(revealActiveSlice);
   });
 }

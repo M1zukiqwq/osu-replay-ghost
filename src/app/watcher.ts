@@ -1,18 +1,93 @@
-import { updateWatcher } from './actions';
-import { getFileIn, tryGetDir, type DirHandle } from './fsAccess';
-import { importFiles, resolvePendingFromLibrary, type ImportContext, type ImportOutcome } from './importer';
+import { OSR_PEEK_BYTES, peekOsrHeader } from '../core/formats/osr';
+import { parseDataRName } from '../core/formats/replayFiles';
+import { updateBrowser, updateWatcher } from './actions';
+import { publishRecent } from './browser';
+import {
+  getFileIn, hasFsObserver, listNames, observeDir, tryGetDir, type DirHandle, type FsChangeRecord, type FsObserver,
+} from './fsAccess';
+import { resolvePendingFromLibrary, type ImportContext } from './importer';
 import { fileMapSongsSource, handleSongsSource } from './library';
+import { ReplayIndex } from './replayIndex';
 import { state } from './state';
 
-export const POLL_INTERVAL_MS = 3000;
-const REPLAY_DIRS = [['Replays'], ['Data', 'r']] as const;
+/** Polling (only without FileSystemObserver): starts at 3 s, backs off to 15 s while nothing changes. */
+export const POLL_MIN_MS = 3000;
+export const POLL_MAX_MS = 15000;
+const POLL_BACKOFF = 1.5;
+/** Quiet time after a change before new replay files are read (osu! may still be writing them). */
+export const SETTLE_MS = 600;
+const HEADER_READ_CONCURRENCY = 8;
 
-interface ReplayEntry { key: string; name: string; getFile: () => Promise<File> }
+export type ReplayDir = 'data' | 'replays';
+const REPLAY_DIRS: readonly ReplayDir[] = ['data', 'replays'];
+const DIR_PATHS: Record<ReplayDir, string[]> = { data: ['Data', 'r'], replays: ['Replays'] };
+const DIR_LABEL: Record<ReplayDir, string> = { data: 'Data/r', replays: 'Replays' };
 
-/** Lists replay files: fresh from the directory (handle mode) or from a static snapshot (webkitdirectory). */
-type ReplayLister = () => Promise<ReplayEntry[]>;
+export interface LocalReplayFile {
+  key: string;
+  dir: ReplayDir;
+  name: string;
+  /** From the Data/r file name; null for Replays/ files. */
+  playedAt: number | null;
+  getFile(): Promise<File>;
+}
 
-interface FailedInfo { size: number; lastModified: number; error: string }
+/** Read access to the two replay folders: live directory handles or a webkitdirectory snapshot. */
+interface ReplaySource {
+  /** Current .osr names; null when the folder does not exist. */
+  list(dir: ReplayDir): Promise<string[] | null>;
+  file(dir: ReplayDir, name: string): Promise<File>;
+  /** Live directory handle for FileSystemObserver (handle mode only). */
+  handle?(dir: ReplayDir): Promise<DirHandle | null>;
+  /** Forget a cached directory handle (the folder was removed or replaced). */
+  reset?(dir: ReplayDir): void;
+}
+
+const notFound = (msg: string) => Object.assign(new Error(msg), { name: 'NotFoundError' });
+
+function handleSource(root: DirHandle): ReplaySource {
+  const cache = new Map<ReplayDir, DirHandle>();
+  const handle = async (dir: ReplayDir) => {
+    const hit = cache.get(dir);
+    if (hit) return hit;
+    const d = await tryGetDir(root, DIR_PATHS[dir]);
+    if (d) cache.set(dir, d);
+    return d;
+  };
+  return {
+    handle,
+    reset: (dir) => cache.delete(dir),
+    async list(dir) {
+      const d = await handle(dir);
+      if (!d) return null;
+      try {
+        return await listNames(d, '.osr');
+      } catch (e) {
+        if ((e as Error).name !== 'NotFoundError') throw e;
+        cache.delete(dir);
+        return null;
+      }
+    },
+    async file(dir, name) {
+      const d = await handle(dir);
+      if (!d) throw notFound(`${DIR_LABEL[dir]} 目录不存在`);
+      return (await d.getFileHandle(name)).getFile();
+    },
+  };
+}
+
+function snapshotSource(files: Record<ReplayDir, Map<string, File>>): ReplaySource {
+  return {
+    async list(dir) {
+      return files[dir].size ? [...files[dir].keys()] : null;
+    },
+    async file(dir, name) {
+      const f = files[dir].get(name);
+      if (!f) throw notFound(`目录快照中没有 ${DIR_LABEL[dir]}/${name}`);
+      return f;
+    },
+  };
+}
 
 function describeError(e: unknown): string {
   const err = e as Error;
@@ -31,24 +106,79 @@ export function parseBeatmapDirectory(cfgText: string): string | null {
 }
 
 const isAbsolutePath = (p: string) => /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\\\') || p.startsWith('/');
+const isOsr = (name: string) => name.toLowerCase().endsWith('.osr');
+const isHidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
 
+async function forEachLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<unknown>): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await fn(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+/**
+ * Keeps an index of local replay *files* (names, plus Replays/ headers once needed) for the beatmap
+ * browser; it never imports replays itself. Changes arrive from FileSystemObserver where available,
+ * otherwise from polling that backs off while idle and pauses while the page is hidden.
+ */
 export class Watcher {
-  private lister: ReplayLister | null = null;
-  private known = new Set<string>();
-  private failed = new Map<string, FailedInfo>();
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private scanning = false;
-  private root: DirHandle | null = null;
+  readonly index = new ReplayIndex();
+  /** Called with new or rewritten replay files of the map currently shown in the preview. */
+  onActiveMapFiles: ((md5: string, files: LocalReplayFile[]) => Promise<void> | void) | null = null;
 
-  constructor(private ctx: ImportContext, private onImported: (o: ImportOutcome) => void) {}
+  private source: ReplaySource | null = null;
+  private root: DirHandle | null = null;
+  private observers = new Map<ReplayDir, FsObserver>();
+  /** Maps played since binding that have not been opened yet. */
+  private fresh = new Set<string>();
+  private queued = new Map<string, { dir: ReplayDir; name: string }>();
+  private rescan = new Set<ReplayDir>();
+  private exportedSynced = false;
+  private settleTimer: ReturnType<typeof setTimeout> | null = null;
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private pollDelay = POLL_MIN_MS;
+  private polling = false;
+  private flushing = false;
+  /** Bumped on every (re)bind so late async work from an old binding is dropped. */
+  private generation = 0;
+
+  constructor(private ctx: ImportContext) {
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (!isHidden()) this.wake();
+      });
+      window.addEventListener('focus', () => this.wake());
+    }
+  }
 
   get rootHandle(): DirHandle | null {
     return this.root;
   }
 
+  get hasSource(): boolean {
+    return this.source !== null;
+  }
+
+  /** Local replays of a beatmap known so far (Data/r names + Replays/ headers already read). */
+  countFor(md5: string): number {
+    return this.index.countFor(md5);
+  }
+
   private stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    this.generation++;
+    for (const o of this.observers.values()) o.disconnect();
+    this.observers.clear();
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.settleTimer = this.pollTimer = null;
+    this.queued.clear();
+    this.rescan.clear();
+    this.fresh.clear();
+    this.index.clear();
+    this.exportedSynced = false;
+    this.source = null;
+    this.pollDelay = POLL_MIN_MS;
   }
 
   private async loadDb(read: () => Promise<File | null>): Promise<void> {
@@ -62,13 +192,25 @@ export class Watcher {
     updateWatcher({ dbEntries: this.ctx.library.size });
   }
 
-  /** Binds via File System Access API: reads osu!.db, records a baseline (D1), then polls. */
+  private publish(): void {
+    publishRecent(this.index, this.ctx.library, this.fresh);
+  }
+
+  /** Called when a map is opened: it no longer counts as a new play. Also refreshes metadata. */
+  markSeen(md5: string): void {
+    this.fresh.delete(md5);
+    if (this.source) this.publish();
+  }
+
+  /** Binds via File System Access API: reads osu!.db, indexes Data/r names, then watches for changes. */
   async bindHandle(root: DirHandle): Promise<void> {
     this.stop();
+    const gen = this.generation;
     this.root = root;
-    this.known.clear();
-    this.failed.clear();
-    updateWatcher({ status: 'scanning', rootName: root.name, mode: 'handle', error: null, songsNeedsAuth: null, songsScan: null, restorable: null });
+    updateWatcher({
+      status: 'scanning', rootName: root.name, mode: 'handle', detection: null, error: null,
+      songsNeedsAuth: null, songsScan: null, restorable: null,
+    });
     try {
       await this.loadDb(async () => {
         try {
@@ -92,25 +234,20 @@ export class Watcher {
         this.ctx.library.songs = songs ? handleSongsSource(songs) : null;
         updateWatcher({ songsAvailable: !!songs });
       }
-      this.lister = async () => {
-        const out: ReplayEntry[] = [];
-        for (const path of REPLAY_DIRS) {
-          const dir = await tryGetDir(root, [...path]);
-          if (!dir) continue;
-          for await (const [name, h] of dir.entries()) {
-            if (h.kind === 'file' && name.toLowerCase().endsWith('.osr')) {
-              out.push({ key: `${path.join('/')}/${name}`, name, getFile: () => h.getFile() });
-            }
-          }
-        }
-        return out;
-      };
-      for (const e of await this.lister()) this.known.add(e.key);
-      updateWatcher({ status: 'bound', lastScanAt: Date.now(), baselineCount: this.known.size, failedCount: 0 });
+
+      this.source = handleSource(root);
+      // Observe first so nothing written during the initial listing is lost.
+      for (const dir of REPLAY_DIRS) await this.observe(dir);
+      const names = await this.source.list('data');
+      if (gen !== this.generation) return;
+      this.index.syncDataR(names ?? []);
+      this.publish();
+      updateWatcher({ status: 'bound', lastScanAt: Date.now(), localReplays: this.index.dataRCount, detection: this.detection() });
+      updateBrowser({ tab: 'recent' });
       await resolvePendingFromLibrary(this.ctx);
-      this.timer = setInterval(() => void this.poll(), POLL_INTERVAL_MS);
+      this.schedulePoll();
     } catch (e) {
-      updateWatcher({ status: 'error', error: describeError(e) });
+      if (gen === this.generation) updateWatcher({ status: 'error', error: describeError(e) });
     }
   }
 
@@ -124,9 +261,8 @@ export class Watcher {
   /** webkitdirectory fallback: a one-off snapshot, looked up lazily by relative path (no bulk parsing). */
   async bindFiles(files: File[]): Promise<void> {
     this.stop();
+    const gen = this.generation;
     this.root = null;
-    this.known.clear();
-    this.failed.clear();
     const byPath = new Map<string, File>();
     let rootName = '';
     for (const f of files) {
@@ -135,7 +271,10 @@ export class Watcher {
       rootName ||= parts.length > 1 ? parts[0] : '';
       byPath.set((parts.length > 1 ? parts.slice(1) : parts).join('/').toLowerCase(), f);
     }
-    updateWatcher({ status: 'scanning', rootName: rootName || '所选目录', mode: 'files', error: null, songsNeedsAuth: null, songsScan: null });
+    updateWatcher({
+      status: 'scanning', rootName: rootName || '所选目录', mode: 'files', detection: null, error: null,
+      songsNeedsAuth: null, songsScan: null,
+    });
     try {
       await this.loadDb(async () => byPath.get('osu!.db') ?? null);
       let songsPath = 'songs';
@@ -150,82 +289,241 @@ export class Watcher {
       const prefix = songsPath + '/';
       for (const [k, f] of byPath) if (k.startsWith(prefix)) songs.set(k.slice(prefix.length), f);
       this.ctx.library.songs = songs.size ? fileMapSongsSource(songs) : null;
-      const replays: ReplayEntry[] = [];
+
+      const dirs: Record<ReplayDir, Map<string, File>> = { data: new Map(), replays: new Map() };
       for (const [k, f] of byPath) {
-        if ((k.startsWith('replays/') || k.startsWith('data/r/')) && k.endsWith('.osr')) {
-          replays.push({ key: k, name: f.name, getFile: async () => f });
-        }
+        if (!k.endsWith('.osr')) continue;
+        if (k.startsWith('data/r/') && !k.slice(7).includes('/')) dirs.data.set(f.name, f);
+        else if (k.startsWith('replays/') && !k.slice(8).includes('/')) dirs.replays.set(f.name, f);
       }
-      this.lister = async () => replays;
-      for (const e of replays) this.known.add(e.key);
-      updateWatcher({ status: 'bound', songsAvailable: songs.size > 0, lastScanAt: Date.now(), baselineCount: this.known.size, failedCount: 0 });
+      if (gen !== this.generation) return;
+      this.source = snapshotSource(dirs);
+      this.index.syncDataR([...dirs.data.keys()]);
+      this.publish();
+      updateWatcher({ status: 'bound', songsAvailable: songs.size > 0, lastScanAt: Date.now(), localReplays: this.index.dataRCount });
+      updateBrowser({ tab: 'recent' });
       await resolvePendingFromLibrary(this.ctx);
     } catch (e) {
-      updateWatcher({ status: 'error', error: describeError(e) });
+      if (gen === this.generation) updateWatcher({ status: 'error', error: describeError(e) });
     }
   }
 
-  private async importEntries(entries: { entry: ReplayEntry; file: File }[], origin: string): Promise<ImportOutcome | null> {
-    if (!entries.length) return null;
-    const outcome = await importFiles(entries.map((e) => e.file), this.ctx, origin);
-    for (const { entry, file } of entries) {
-      const status = outcome.statusByFile.get(file);
-      if (status === 'failed') {
-        const detail = outcome.report.items.find((i) => i.fileName === file.name && i.status === 'failed')?.detail ?? '';
-        this.failed.set(entry.key, { size: file.size, lastModified: file.lastModified, error: detail });
-        this.known.delete(entry.key);
-      } else {
-        this.failed.delete(entry.key);
-        this.known.add(entry.key);
-      }
-    }
-    updateWatcher({ failedCount: this.failed.size });
-    this.onImported(outcome);
-    return outcome;
+  /**
+   * Local replay files of one beatmap, newest Data/r first, then Replays/ files whose header names
+   * this map. The first call reads the header of every Replays/ file once; later calls only new ones.
+   */
+  async localReplayFiles(md5: string): Promise<LocalReplayFile[]> {
+    const source = this.source;
+    if (!source) return [];
+    await this.syncExported();
+    const out = this.index.dataRFor(md5).map((r) => this.ref(source, 'data', r.name, r.playedAt));
+    for (const name of this.index.exportedFor(md5)) out.push(this.ref(source, 'replays', name, null));
+    return out;
   }
 
-  /** One polling round: list names only, open just the new files. Rounds never overlap. */
-  async poll(): Promise<void> {
-    if (this.scanning || !this.lister || state.watcher.mode !== 'handle') return;
-    this.scanning = true;
+  private ref(source: ReplaySource, dir: ReplayDir, name: string, playedAt: number | null): LocalReplayFile {
+    return { key: `${dir}/${name}`, dir, name, playedAt, getFile: () => source.file(dir, name) };
+  }
+
+  private async syncExported(): Promise<void> {
+    if (!this.source || (this.exportedSynced && this.observers.has('replays'))) return;
+    const names = await this.source.list('replays');
+    await forEachLimit(names ? this.index.syncExportedNames(names) : [], HEADER_READ_CONCURRENCY, (n) => this.readHeader(n));
+    if (!this.exportedSynced) {
+      this.exportedSynced = true;
+      this.schedulePoll(); // Replays/ joins polling now if it is not observed
+    }
+  }
+
+  private async readHeader(name: string): Promise<string | null> {
+    let md5: string | null = null;
     try {
-      const fresh: { entry: ReplayEntry; file: File }[] = [];
-      for (const entry of await this.lister()) {
-        if (this.known.has(entry.key)) continue;
-        const file = await entry.getFile();
-        const f = this.failed.get(entry.key);
-        if (f && f.size === file.size && f.lastModified === file.lastModified) continue;
-        fresh.push({ entry, file });
+      const file = await this.source!.file('replays', name);
+      md5 = peekOsrHeader(new Uint8Array(await file.slice(0, OSR_PEEK_BYTES).arrayBuffer()))?.beatmapMd5 ?? null;
+    } catch {
+      // unreadable or still being written; a later change event reads it again
+    }
+    this.index.setExported(name, md5);
+    return md5;
+  }
+
+  // --- change detection -------------------------------------------------------------------------
+
+  private detection(): 'events' | 'polling' {
+    return hasFsObserver() && this.observers.has('data') ? 'events' : 'polling';
+  }
+
+  private async observe(dir: ReplayDir): Promise<boolean> {
+    if (this.observers.has(dir)) return true;
+    const handle = await this.source?.handle?.(dir);
+    if (!handle) return false;
+    const gen = this.generation;
+    const obs = await observeDir(handle, (records) => {
+      if (gen === this.generation) this.onRecords(dir, records);
+    });
+    if (!obs) return false;
+    if (gen !== this.generation) {
+      obs.disconnect();
+      return false;
+    }
+    this.observers.set(dir, obs);
+    return true;
+  }
+
+  private onRecords(dir: ReplayDir, records: FsChangeRecord[]): void {
+    for (const r of records) {
+      const name = r.relativePathComponents[r.relativePathComponents.length - 1] ?? r.changedHandle?.name ?? '';
+      switch (r.type) {
+        case 'appeared':
+        case 'modified':
+        case 'moved':
+          if (r.type === 'moved' && r.relativePathMovedFrom?.length) this.forget(dir, r.relativePathMovedFrom[r.relativePathMovedFrom.length - 1]);
+          if (isOsr(name)) this.queued.set(`${dir}/${name}`, { dir, name });
+          break;
+        case 'disappeared':
+          this.forget(dir, name);
+          break;
+        case 'unknown':
+          this.rescan.add(dir);
+          break;
+        case 'errored':
+          // The observation stopped (e.g. the folder was deleted): fall back to polling this folder.
+          this.observers.get(dir)?.disconnect();
+          this.observers.delete(dir);
+          this.source?.reset?.(dir);
+          this.rescan.add(dir);
+          updateWatcher({ detection: this.detection() });
+          this.schedulePoll();
+          break;
       }
-      await this.importEntries(fresh, '目录监听');
-      updateWatcher({ status: 'bound', lastScanAt: Date.now(), error: null });
+    }
+    this.scheduleSettle();
+  }
+
+  private forget(dir: ReplayDir, name: string): void {
+    if (dir === 'data') this.index.removeDataR(name);
+    else this.index.removeExported(name);
+  }
+
+  private scheduleSettle(): void {
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => {
+      this.settleTimer = null;
+      void this.flush();
+    }, SETTLE_MS);
+  }
+
+  /** Applies queued changes: indexes new names, reads new Replays/ headers, hands the previewed map its new files. */
+  async flush(): Promise<void> {
+    const source = this.source;
+    if (!source) return;
+    if (this.flushing) {
+      this.scheduleSettle();
+      return;
+    }
+    this.flushing = true;
+    const gen = this.generation;
+    try {
+      for (const dir of [...this.rescan]) {
+        this.rescan.delete(dir);
+        const names = await source.list(dir);
+        if (!names) continue;
+        const unknown = dir === 'data' ? this.index.diffDataR(names) : this.exportedSynced ? this.index.syncExportedNames(names) : [];
+        for (const name of unknown) this.queued.set(`${dir}/${name}`, { dir, name });
+      }
+      const items = [...this.queued.values()];
+      this.queued.clear();
+      const active = state.activeKey;
+      const forActive: LocalReplayFile[] = [];
+      for (const { dir, name } of items) {
+        if (dir === 'data') {
+          const parsed = parseDataRName(name);
+          if (!parsed) continue;
+          if (this.index.addDataR(name) && parsed.md5 !== active) this.fresh.add(parsed.md5);
+          if (parsed.md5 === active) forActive.push(this.ref(source, 'data', name, parsed.playedAt));
+        } else {
+          const md5 = await this.readHeader(name);
+          if (md5 && md5 === active) forActive.push(this.ref(source, 'replays', name, null));
+        }
+      }
+      if (gen !== this.generation) return;
+      this.publish();
+      updateWatcher({ status: 'bound', error: null, lastScanAt: Date.now(), localReplays: this.index.dataRCount });
+      if (forActive.length && active && this.onActiveMapFiles) await this.onActiveMapFiles(active, forActive);
     } catch (e) {
-      updateWatcher({ status: 'error', error: describeError(e) });
+      if (gen === this.generation) updateWatcher({ status: 'error', error: describeError(e) });
     } finally {
-      this.scanning = false;
+      this.flushing = false;
     }
   }
 
-  async retryFailed(): Promise<ImportOutcome | null> {
-    if (!this.lister || !this.failed.size) return null;
-    const list = (await this.lister()).filter((e) => this.failed.has(e.key));
-    return this.importEntries(await Promise.all(list.map(async (entry) => ({ entry, file: await entry.getFile() }))), '重试失败文件');
+  /** Folders that still need polling: not observed, and (for Replays/) only once its headers were needed. */
+  private polledDirs(): ReplayDir[] {
+    if (state.watcher.mode !== 'handle' || !this.source) return [];
+    return REPLAY_DIRS.filter((d) => !this.observers.has(d) && (d === 'data' || this.exportedSynced));
   }
 
-  /** D1: history is not auto-imported; these import on demand. */
-  async importRecent(n: number): Promise<ImportOutcome | null> {
-    if (!this.lister) return null;
-    const all = await Promise.all((await this.lister()).map(async (entry) => ({ entry, file: await entry.getFile() })));
-    all.sort((a, b) => b.file.lastModified - a.file.lastModified);
-    return this.importEntries(all.slice(0, n), `导入最近 ${n} 条`);
+  private needsPolling(): boolean {
+    return this.polledDirs().length > 0;
   }
 
-  /** Data/r file names start with the beatmap MD5, so this needs no file reads to filter. */
-  async importBeatmapHistory(md5: string): Promise<ImportOutcome | null> {
-    if (!this.lister) return null;
-    const list = (await this.lister()).filter((e) => /(^|\/)data\/r\//i.test(e.key) && e.name.toLowerCase().startsWith(md5));
-    const entries = await Promise.all(list.map(async (entry) => ({ entry, file: await entry.getFile() })));
-    return this.importEntries(entries, '导入本谱面历史');
+  private schedulePoll(delay = this.pollDelay): void {
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.pollTimer = null;
+    if (!this.needsPolling()) return;
+    this.pollTimer = setTimeout(() => void this.pollRound(), delay);
+  }
+
+  private async pollRound(): Promise<void> {
+    this.pollTimer = null;
+    if (isHidden()) return; // resumed by wake() when the page becomes visible
+    const found = await this.poll();
+    this.pollDelay = found ? POLL_MIN_MS : Math.min(POLL_MAX_MS, Math.round(this.pollDelay * POLL_BACKOFF));
+    this.schedulePoll();
+  }
+
+  /** Back on the page (tab shown / window focused): check right away and reset the backoff. */
+  private wake(): void {
+    if (!this.needsPolling()) return;
+    this.pollDelay = POLL_MIN_MS;
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.pollTimer = null;
+    void this.pollRound();
+  }
+
+  /**
+   * One polling round over the folders that are not observed: list names only and queue unknown ones
+   * (read after SETTLE_MS). Replays/ is only listed once its headers were needed. Returns whether
+   * anything new turned up.
+   */
+  async poll(): Promise<boolean> {
+    const source = this.source;
+    if (!source || this.polling) return false;
+    this.polling = true;
+    const gen = this.generation;
+    let found = false;
+    try {
+      for (const dir of this.polledDirs()) {
+        const names = await source.list(dir);
+        if (gen !== this.generation) return false;
+        if (!names) continue;
+        const unknown = dir === 'data' ? this.index.diffDataR(names) : this.index.syncExportedNames(names);
+        for (const name of unknown) this.queued.set(`${dir}/${name}`, { dir, name });
+        found ||= unknown.length > 0;
+        // A folder that appeared after binding can switch to change events now.
+        if (hasFsObserver() && (await this.observe(dir))) updateWatcher({ detection: this.detection() });
+      }
+      if (found) this.scheduleSettle();
+      else {
+        this.publish();
+        updateWatcher({ lastScanAt: Date.now(), localReplays: this.index.dataRCount });
+      }
+    } catch (e) {
+      if (gen === this.generation) updateWatcher({ status: 'error', error: describeError(e) });
+    } finally {
+      this.polling = false;
+    }
+    return found;
   }
 
   /** Manual fallback when osu!.db is missing: hash every .osu under Songs in the worker. */

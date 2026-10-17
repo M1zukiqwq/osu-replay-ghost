@@ -1,35 +1,34 @@
 import { BinaryReader, BinaryReadError } from '../binary/reader';
+import type { BeatmapInfo } from '../types';
 import { ticksToUnixMs } from './osr';
 
 export const VERSION_FLOAT_DIFFICULTY = 20140609;
 export const VERSION_NO_ENTRY_SIZE = 20191106;
 
-export interface DbBeatmapEntry {
-  md5: string;
+export interface DbBeatmapEntry extends BeatmapInfo {
   folder: string;
   fileName: string;
-  beatmapId: number | null;
-  beatmapSetId: number | null;
-  artist: string;
-  title: string;
-  version: string;
-  mode: number;
   modifiedAt: number | null;
 }
 
 export interface OsuDbIndex { version: number; playerName: string; entries: DbBeatmapEntry[] }
 
-function skipStarRatings(r: BinaryReader): void {
+/** Reads one star-rating list and returns the NoMod value (null when osu! has not calculated it). */
+function readStarRatings(r: BinaryReader): number | null {
   const count = r.i32('星级列表数量');
   if (count < 0) throw new BinaryReadError(`星级列表数量无效：${count}`);
+  let noMod: number | null = null;
   for (let i = 0; i < count; i++) {
     r.skip(1, '星级 Int 标记');
-    r.skip(4, '星级 Mods');
+    const mods = r.i32('星级 Mods');
     const tag = r.u8('星级数值类型');
-    if (tag === 0x0d) r.skip(8, '星级 Double');
-    else if (tag === 0x0c) r.skip(4, '星级 Float');
+    let value: number;
+    if (tag === 0x0d) value = r.f64('星级 Double');
+    else if (tag === 0x0c) value = r.f32('星级 Float');
     else throw new BinaryReadError(`星级数值类型未知：0x${tag.toString(16)}（偏移 ${r.offset - 1}）`);
+    if (mods === 0 && Number.isFinite(value) && value > 0) noMod = value;
   }
+  return noMod;
 }
 
 function readEntry(r: BinaryReader, version: number): DbBeatmapEntry {
@@ -37,21 +36,29 @@ function readEntry(r: BinaryReader, version: number): DbBeatmapEntry {
   const entryEnd = version < VERSION_NO_ENTRY_SIZE ? r.i32('条目字节数') + r.offset : -1;
 
   const artist = r.string('艺术家');
-  r.skipString('艺术家 Unicode');
+  const artistUnicode = r.string('艺术家 Unicode');
   const title = r.string('标题');
-  r.skipString('标题 Unicode');
-  r.skipString('作者');
+  const titleUnicode = r.string('标题 Unicode');
+  const creator = r.string('作者');
   const diffName = r.string('难度名');
   r.skipString('音频文件名');
   const md5 = r.string('MD5').toLowerCase();
   const fileName = r.string('.osu 文件名');
-  r.skip(1, '排名状态');
-  r.skip(6, '物件数');
+  const rankedStatus = r.u8('排名状态');
+  const objectCount = r.u16('圆圈数') + r.u16('滑条数') + r.u16('转盘数');
   const modifiedAt = ticksToUnixMs(r.i64('修改时间'));
-  r.skip(floatDiff ? 16 : 4, 'AR/CS/HP/OD');
+  const diff = floatDiff
+    ? [r.f32('AR'), r.f32('CS'), r.f32('HP'), r.f32('OD')]
+    : [r.u8('AR'), r.u8('CS'), r.u8('HP'), r.u8('OD')];
   r.skip(8, '滑条速度');
-  if (floatDiff) for (let i = 0; i < 4; i++) skipStarRatings(r);
-  r.skip(12, '时长信息');
+  let stars: number | null = null;
+  if (floatDiff) {
+    stars = readStarRatings(r);
+    for (let i = 0; i < 3; i++) readStarRatings(r);
+  }
+  r.skip(4, 'Drain 时长');
+  const totalTimeMs = r.i32('总时长');
+  r.skip(4, '预览时间');
   const tpCount = r.i32('Timing point 数量');
   if (tpCount < 0) throw new BinaryReadError(`Timing point 数量无效：${tpCount}`);
   r.skip(tpCount * 17, 'Timing points');
@@ -62,12 +69,12 @@ function readEntry(r: BinaryReader, version: number): DbBeatmapEntry {
   r.skip(2, '本地 offset');
   r.skip(4, '堆叠系数');
   const mode = r.u8('模式');
-  r.skipString('来源');
-  r.skipString('标签');
+  const source = r.string('来源');
+  const tags = r.string('标签');
   r.skip(2, '在线 offset');
   r.skipString('标题字体');
   r.skip(1, '是否未玩过');
-  r.skip(8, '上次游玩时间');
+  const lastPlayedAt = ticksToUnixMs(r.i64('上次游玩时间'));
   r.skip(1, '是否 osz2');
   const folder = r.string('文件夹名');
   r.skip(8, '上次检查时间');
@@ -82,14 +89,20 @@ function readEntry(r: BinaryReader, version: number): DbBeatmapEntry {
     }
     r.offset = entryEnd;
   }
+  const [ar, cs, hp, od] = diff.map((v) => Math.round(v * 100) / 100);
   return {
-    md5, folder, fileName, artist, title, version: diffName, mode, modifiedAt,
+    md5, folder, fileName, modifiedAt,
+    artist, artistUnicode, title, titleUnicode, creator, version: diffName, source, tags, mode,
+    rankedStatus, cs, ar, od, hp, stars,
+    totalTimeMs: totalTimeMs > 0 ? totalTimeMs : null,
+    objectCount,
+    lastPlayedAt,
     beatmapId: beatmapId > 0 ? beatmapId : null,
     beatmapSetId: beatmapSetId > 0 ? beatmapSetId : null,
   };
 }
 
-/** Parses osu!.db into a lookup list. Only the fields needed to locate .osu files are decoded. */
+/** Parses osu!.db into a lookup list with the metadata the beatmap browser shows. */
 export function parseOsuDb(bytes: Uint8Array): OsuDbIndex {
   const r = new BinaryReader(bytes);
   const version = r.i32('版本号');

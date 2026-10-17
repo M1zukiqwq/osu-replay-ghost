@@ -3,8 +3,8 @@ import { simulateNewPlay } from '../app/demo';
 import type { Engine } from '../app/engine';
 import { hasDirectoryPicker, pickDirectory, type DirHandle } from '../app/fsAccess';
 import type { ImportOutcome } from '../app/importer';
-import { getActiveGroup, hasRealData, state } from '../app/state';
-import { loadRootHandle, POLL_INTERVAL_MS, saveRootHandle, type Watcher } from '../app/watcher';
+import { hasRealData, state } from '../app/state';
+import { loadRootHandle, POLL_MAX_MS, POLL_MIN_MS, saveRootHandle, type Watcher } from '../app/watcher';
 import { $, h, setChildren, setText } from './dom';
 import { clockLabel } from './format';
 import { showToast } from './toast';
@@ -27,18 +27,22 @@ function statusText(): { text: string; dot: string; title: string } {
     const db = w.dbEntries !== null ? `谱面库 ${w.dbEntries} 张` : '未找到 osu!.db';
     const songs = w.songsAvailable ? '' : ' · Songs 不可用';
     const scan = w.songsScan ? ` · 扫描 Songs ${w.songsScan.done}/${w.songsScan.total || '…'}` : '';
+    const local = `Data/r ${w.localReplays} 条回放`;
     if (w.mode === 'files') {
       return {
-        text: `已读取目录快照 ${w.rootName} · ${db}${songs}${scan}（此浏览器不支持自动监听）`,
+        text: `已读取目录快照 ${w.rootName} · ${local} · ${db}${songs}${scan}（此浏览器不支持自动监听）`,
         dot: DOT.bound,
-        title: '通过文件夹选择框读取，只能按需查找谱面，不能持续监听新回放。建议使用 Chrome / Edge。',
+        title: '通过文件夹选择框读取，只能按需查找谱面和回放，不能发现之后的新成绩。建议使用 Chrome / Edge。',
       };
     }
-    const last = w.lastScanAt ? ` · 最近扫描 ${clockLabel(w.lastScanAt)}` : '';
+    const live = w.detection === 'events' ? '实时监听' : `定时检查（${POLL_MIN_MS / 1000}–${POLL_MAX_MS / 1000} 秒）`;
+    const last = w.detection === 'polling' && w.lastScanAt ? ` · 最近检查 ${clockLabel(w.lastScanAt)}` : '';
     return {
-      text: `已绑定 ${w.rootName} · 每 ${POLL_INTERVAL_MS / 1000} 秒扫描${last} · ${db}${songs}${scan}`,
+      text: `已绑定 ${w.rootName} · ${live}${last} · ${local} · ${db}${songs}${scan}`,
       dot: DOT.bound,
-      title: `基线 ${w.baselineCount} 个已有回放（不自动导入）${w.failedCount ? `；${w.failedCount} 个文件解析失败，将在文件变化后重试` : ''}`,
+      title: w.detection === 'events'
+        ? '通过 FileSystemObserver 接收 Data/r 与 Replays/ 的变化，平时不扫描目录。只记录文件名，选中谱面后才读取它的回放。'
+        : `此浏览器不支持 FileSystemObserver，改为定时列出 Data/r 的文件名：没有变化时间隔逐渐放宽到 ${POLL_MAX_MS / 1000} 秒，页面在后台时暂停，回到页面立即检查。`,
     };
   }
   return { text: '内置演示库已就绪 (未绑定本地目录)', dot: DOT.idle, title: '' };
@@ -63,33 +67,18 @@ export function renderHeader(deps: HeaderDeps): void {
   $('btnClearDemo').classList.toggle('hidden', !(hasDemo && hasRealData()));
 
   const actions: HTMLElement[] = [];
-  const run = (p: Promise<ImportOutcome | null>) => p.then((o) => {
-    if (o) deps.onImported(o);
-    else showToast('没有可导入的回放', '', 'cyan');
-  }).catch((e) => showToast('操作失败', (e as Error).message, 'pink'));
-
   if (w.restorable && w.status !== 'bound') {
     actions.push(actionBtn(`恢复绑定 ${w.restorable}`, '重新授权上次绑定的 osu! 目录', () => void restoreBinding(deps)));
   }
   if (w.songsNeedsAuth) {
     actions.push(actionBtn('授权 Songs 目录', `osu! 配置中的 Songs 位于根目录之外：${w.songsNeedsAuth}`, () => void authoriseSongs(deps), 'text-amber-300 border-amber-500/40'));
   }
-  if (w.status === 'bound') {
-    if (w.dbEntries === null && w.songsAvailable && !w.songsScan) {
-      actions.push(actionBtn('扫描 Songs', '没有 osu!.db 时，逐个计算 Songs 中 .osu 的 MD5 来匹配谱面（较慢，在后台线程执行）', () => {
-        deps.watcher.scanSongs()
-          .then((n) => showToast('Songs 扫描完成', `已索引 ${n} 个 .osu 文件`, 'emerald'))
-          .catch((e) => showToast('Songs 扫描失败', (e as Error).message, 'pink'));
-      }));
-    }
-    actions.push(actionBtn('导入最近 10 条', '从 Replays/ 与 Data/r/ 中按修改时间导入最近 10 条历史回放', () => void run(deps.watcher.importRecent(10))));
-    const g = getActiveGroup();
-    if (g && g.beatmap.source !== 'demo') {
-      actions.push(actionBtn('导入本谱面历史', 'Data/r/ 中以当前谱面 MD5 开头的本地成绩回放', () => void run(deps.watcher.importBeatmapHistory(g.key))));
-    }
-    if (w.failedCount) {
-      actions.push(actionBtn(`重试失败 (${w.failedCount})`, '重新读取解析失败的回放文件', () => void run(deps.watcher.retryFailed()), 'text-rose-300 border-rose-500/40'));
-    }
+  if (w.status === 'bound' && w.dbEntries === null && w.songsAvailable && !w.songsScan) {
+    actions.push(actionBtn('扫描 Songs', '没有 osu!.db 时，逐个计算 Songs 中 .osu 的 MD5 来匹配谱面（较慢，在后台线程执行）', () => {
+      deps.watcher.scanSongs()
+        .then((n) => showToast('Songs 扫描完成', `已索引 ${n} 个 .osu 文件`, 'emerald'))
+        .catch((e) => showToast('Songs 扫描失败', (e as Error).message, 'pink'));
+    }));
   }
   setChildren($('watcherActions'), ...actions);
 }
@@ -99,9 +88,10 @@ async function bindRoot(deps: HeaderDeps, root: DirHandle): Promise<void> {
   if (state.watcher.status === 'bound') {
     void saveRootHandle(root);
     const w = state.watcher;
+    const live = w.detection === 'events' ? '新成绩会实时出现在「最近游玩」' : '会定时检查新成绩（页面在后台时暂停）';
     showToast(
       '成功绑定本地 osu! 根目录',
-      `${w.dbEntries !== null ? `已索引 ${w.dbEntries} 张谱面` : '未找到 osu!.db，可点击「扫描 Songs」'}；已记录 ${w.baselineCount} 个已有回放作为基线，之后每 ${POLL_INTERVAL_MS / 1000} 秒检查 Data/r 与 Replays 的新回放`,
+      `${w.dbEntries !== null ? `已索引 ${w.dbEntries} 张谱面` : '未找到 osu!.db，可点击「扫描 Songs」'}；Data/r 中 ${state.browser.recentTotal} 张谱面共有 ${w.localReplays} 条本地回放。在「最近游玩」或「搜索」中选择谱面即可读取它的回放，${live}`,
       'emerald',
     );
   }
@@ -159,7 +149,7 @@ export async function initHeader(deps: HeaderDeps): Promise<void> {
     if (!files.length) return;
     await deps.watcher.bindFiles(files);
     if (state.watcher.status === 'bound') {
-      showToast('已读取 osu! 目录', `${state.watcher.dbEntries !== null ? `谱面库 ${state.watcher.dbEntries} 张` : '未找到 osu!.db'}；历史回放可用顶栏按钮按需导入`, 'emerald');
+      showToast('已读取 osu! 目录', `${state.watcher.dbEntries !== null ? `谱面库 ${state.watcher.dbEntries} 张` : '未找到 osu!.db'}；在「最近游玩」或「搜索」中选择谱面即可读取它的回放`, 'emerald');
     }
   });
 

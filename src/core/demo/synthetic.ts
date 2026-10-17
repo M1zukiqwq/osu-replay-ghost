@@ -11,6 +11,8 @@ export interface SynthConfig {
   mods: number;
   missWindows: [number, number][];
   chokeMissProb: number;
+  /** Sliders starting inside these windows (and not missed) are released a third of the way in → slider break. */
+  sliderBreakWindows: [number, number][];
   aimBiasLong: number;
   aimSpread: number;
   timingBias: number;
@@ -100,7 +102,11 @@ export function generateSyntheticFrames(beatmap: Beatmap, cfg: SynthConfig): Raw
     const hold = Math.max(12, Math.round(cfg.baseHoldMs + (rHold - 0.5) * 16));
     const alternate = obj.time - prevTime < 145 || rKey < cfg.altPreference;
     const key: KeyName = alternate ? (prevKey === 'K1' ? 'K2' : 'K1') : cfg.dominantKey;
-    const releaseTime = obj.type === 'slider' ? Math.max(tapTime + hold, Math.round(obj.endTime)) : tapTime + hold;
+    let releaseTime = obj.type === 'slider' ? Math.max(tapTime + hold, Math.round(obj.endTime)) : tapTime + hold;
+    const breaks = cfg.sliderBreakWindows.some(([a, b]) => obj.time >= a && obj.time <= b);
+    if (obj.type === 'slider' && breaks && !isMiss) {
+      releaseTime = Math.max(tapTime + hold, Math.round(obj.time + (obj.endTime - obj.time) / 3));
+    }
     plans.push({ obj, tapTime, landing, key, releaseTime });
     prevKey = key;
     prevTime = obj.time;

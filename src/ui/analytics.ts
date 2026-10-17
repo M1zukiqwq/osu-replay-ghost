@@ -26,9 +26,12 @@ function renderSummary(m: ScopeMetrics): void {
   $('k2RatioBar').style.width = `${m.k2Pct ?? 0}%`;
   setText('kpsBadge', `平均 ${num(m.kps, 1)} KPS`);
   setText('statSliceMissCount', String(m.missCount));
+  setText('statSliceBreakCount', m.sliderBreakCount ? `+${m.sliderBreakCount} 断连` : '');
   const reason = $('statSliceMissReason');
-  reason.textContent = m.missReason;
-  reason.title = m.missReason;
+  // Misses explain first; with none, the first slider break's reason is shown instead.
+  reason.textContent = m.missCount === 0 && m.sliderBreakReason ? `断连：${m.sliderBreakReason}` : m.missReason;
+  reason.title = [m.missCount ? `Miss：${m.missReason}` : '', m.sliderBreakReason ? `断连：${m.sliderBreakReason}` : '']
+    .filter(Boolean).join('\n') || m.missReason;
   setText('statSliceAimOffset', num(m.meanDeviation, 1, ' px'));
   setText('statSliceUR', `UR ${num(m.primary?.ur ?? null, 1)}`);
 
@@ -44,6 +47,7 @@ function renderSummary(m: ScopeMetrics): void {
       h('td', { class: 'py-1.5 text-right text-pink-300 font-bold' }, String(row.k2)),
       h('td', { class: 'py-1.5 text-right text-slate-300' }, row.altPct === null ? DASH : `Alt ${Math.round(row.altPct)}%`),
       h('td', { class: `py-1.5 text-right ${row.miss > 0 ? 'text-rose-400 font-bold' : 'text-emerald-400'}` }, String(row.miss)),
+      h('td', { class: `py-1.5 text-right ${row.sliderBreaks > 0 ? 'text-orange-300 font-bold' : 'text-slate-500'}` }, String(row.sliderBreaks)),
       h('td', { class: 'py-1.5 text-right text-amber-300' }, num(row.meanDeviation, 1, 'px')),
     );
   }));
@@ -72,10 +76,14 @@ function renderAimTab(m: ScopeMetrics): void {
     const tendency = over >= under
       ? ['明显偏向 ', strong('text-rose-400', `Overaim（拉过头 ${Math.round(over)}%）`), '，跳跃时手部惯性越过圆心']
       : ['明显偏向 ', strong('text-amber-300', `Underaim（未拉到位 ${Math.round(under)}%）`), '，光标还没到圆心就按下了'];
-    parts = ['🔍 ', strong('', '本区间诊断：'), '共检测到 ', strong('text-rose-400', `${m.missCount} 次 Miss`), '（模拟判定），落点趋势',
+    const breaks = m.sliderBreakCount ? ['，另有 ', strong('text-orange-300', `${m.sliderBreakCount} 次滑条断连`)] : [];
+    parts = ['🔍 ', strong('', '本区间诊断：'), '共检测到 ', strong('text-rose-400', `${m.missCount} 次 Miss`), ...breaks, '（模拟判定），落点趋势',
       ...tendency, '。建议用播放器下方的 ', strong('', '「◀ -1帧 / +1帧 ▶」'), '（或键盘 ←/→）逐帧对照各回放颜色的轨迹，观察急停时机。'];
+  } else if (m.sliderBreakCount > 0) {
+    parts = ['🔗 ', strong('', '本区间诊断：'), '没有 Miss，但有 ', strong('text-orange-300', `${m.sliderBreakCount} 次滑条断连`),
+      '（模拟判定）：', m.sliderBreakReason, '。打开「圆心落点偏差线」后，播放器里会用橙色 ✕ 标出没跟住的 tick / 折返 / 滑条尾，并连线到当时的光标位置。'];
   } else {
-    parts = ['✅ ', strong('', '本区间诊断：'), '所选 Replay 在此区间内零 Miss（模拟判定），平均距圆心偏差 ',
+    parts = ['✅ ', strong('', '本区间诊断：'), '所选 Replay 在此区间内零 Miss、零断连（模拟判定），平均距圆心偏差 ',
       strong('text-cyan-300', num(m.meanDeviation, 1, 'px')), '。'];
   }
   setChildren($('aimDiagnosticCallout'), ...parts);

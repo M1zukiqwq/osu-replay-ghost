@@ -27,6 +27,23 @@ export function playedAtLabel(ms: number | null): string {
   return new Date(ms).toLocaleString('zh-CN', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+/** "刚刚" / "12 分钟前" / "3 小时前" for the last day, then a date. */
+export function agoLabel(ms: number | null, now = Date.now()): string {
+  if (ms === null) return DASH;
+  const min = Math.floor((now - ms) / 60000);
+  if (min < 1) return '刚刚';
+  if (min < 60) return `${min} 分钟前`;
+  if (min < 24 * 60) return `${Math.floor(min / 60)} 小时前`;
+  return playedAtLabel(ms);
+}
+
+/** m:ss for a length in milliseconds. */
+export function lengthLabel(ms: number | null): string {
+  if (ms === null) return DASH;
+  const s = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 export function clockLabel(ms: number): string {
   return new Date(ms).toLocaleTimeString('zh-CN', { hour12: false });
 }

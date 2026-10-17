@@ -122,6 +122,17 @@ describe('osu!.db [B1]', () => {
     });
   }
 
+  it('reads browser metadata: names, creator, tags, difficulty, NoMod stars and last played', () => {
+    const [a] = parseOsuDb(fixture('osudb_20250107.db')).entries;
+    expect(a).toMatchObject({
+      artistUnicode: 'ArtistU', titleUnicode: 'SongU', creator: 'Creator', source: 'source', tags: 'tag1 tag2',
+      rankedStatus: 4, objectCount: 16, ar: 9, cs: 4, hp: 5, od: 8, stars: 5.5, totalTimeMs: 125000,
+      lastPlayedAt: ticksToUnixMs(638398406450000000n),
+    });
+    // Before 2014-06-09 osu!.db stored byte difficulty values and no star ratings.
+    expect(parseOsuDb(fixture('osudb_20140101.db')).entries[0]).toMatchObject({ ar: 9, cs: 4, od: 8, stars: null });
+  });
+
   it('fails with a positioned message on a truncated database', () => {
     const bytes = fixture('osudb_20250107.db');
     expect(() => parseOsuDb(bytes.subarray(0, bytes.length - 120))).toThrow(/第 2\/2 个谱面条目解析失败/);

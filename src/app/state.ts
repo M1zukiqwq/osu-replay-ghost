@@ -1,4 +1,4 @@
-import type { Beatmap, Replay, Scope } from '../core/types';
+import type { Beatmap, BeatmapInfo, Replay, Scope } from '../core/types';
 import type { AnalyzedReplay } from '../core/analysis/metrics';
 
 export const REPLAY_COLORS = ['#22d3ee', '#f472b6', '#fbbf24', '#34d399', '#a78bfa'] as const;
@@ -6,7 +6,14 @@ export const COMBO_COLORS = ['#38bdf8', '#f472b6', '#34d399', '#fbbf24'] as cons
 export const DEFAULT_SLICE_MS = 2000;
 export const DEFAULT_SPEED = 0.25;
 
-export interface Group { key: string; beatmap: Beatmap; replays: Replay[]; nextColorIdx: number }
+export interface Group {
+  key: string;
+  beatmap: Beatmap;
+  replays: Replay[];
+  nextColorIdx: number;
+  /** Opened from the beatmap browser only; dropped again once several newer maps have been opened. */
+  transient: boolean;
+}
 
 export type DetailTab = 'aim' | 'tap' | 'trend';
 
@@ -21,17 +28,52 @@ export type WatcherStatus = 'unbound' | 'scanning' | 'bound' | 'error';
 export interface WatcherState {
   status: WatcherStatus;
   rootName: string | null;
-  /** 'handle' = File System Access API (polling), 'files' = one-off webkitdirectory snapshot. */
+  /** 'handle' = File System Access API (kept up to date), 'files' = one-off webkitdirectory snapshot. */
   mode: 'handle' | 'files' | null;
+  /** How Data/r and Replays/ changes are noticed in handle mode: FileSystemObserver events or polling. */
+  detection: 'events' | 'polling' | null;
   lastScanAt: number | null;
   error: string | null;
   dbEntries: number | null;
   songsAvailable: boolean;
   songsNeedsAuth: string | null;
   songsScan: { done: number; total: number } | null;
-  baselineCount: number;
-  failedCount: number;
+  /** Replays listed in Data/r (names only, nothing is opened). */
+  localReplays: number;
   restorable: string | null;
+}
+
+export type BrowserTab = 'recent' | 'search' | 'loaded';
+
+export interface RecentMap {
+  md5: string;
+  lastPlayedAt: number | null;
+  /** Data/r replays of this map. */
+  count: number;
+  /** Played since the folder was bound and not opened yet. */
+  isNew: boolean;
+  info: BeatmapInfo | null;
+}
+
+/** Beatmap browser: what to look at. Independent of which replays are loaded. */
+export interface BrowserState {
+  tab: BrowserTab;
+  query: string;
+  recent: RecentMap[];
+  /** Distinct beatmaps with Data/r replays. */
+  recentTotal: number;
+  results: BeatmapInfo[];
+  resultTotal: number;
+}
+
+/** Replay preview: local replays of the map picked in the browser, read on demand. */
+export interface PreviewState {
+  key: string | null;
+  loading: boolean;
+  /** Local replay files of `key` (Data/r + Replays/); null when no osu! folder is bound. */
+  total: number | null;
+  loaded: number;
+  error: string | null;
 }
 
 export interface AppState {
@@ -42,6 +84,8 @@ export interface AppState {
   primaryId: string | null;
   sliceDurationMs: number;
   scope: Scope;
+  /** Parent scopes of a detail-bar drill-down, innermost last; reset whenever the scope is set another way. */
+  scopeHistory: Scope[];
   currentTimeMs: number;
   isPlaying: boolean;
   playbackSpeed: number;
@@ -53,6 +97,8 @@ export interface AppState {
   activeTab: DetailTab;
   isRangeSelectMode: boolean;
   watcher: WatcherState;
+  browser: BrowserState;
+  preview: PreviewState;
   importLog: ImportReport[];
 }
 
@@ -65,6 +111,7 @@ function initialState(): AppState {
     primaryId: null,
     sliceDurationMs: DEFAULT_SLICE_MS,
     scope: { type: 'full', startMs: 0, endMs: 10000 },
+    scopeHistory: [],
     currentTimeMs: 0,
     isPlaying: false,
     playbackSpeed: DEFAULT_SPEED,
@@ -76,9 +123,11 @@ function initialState(): AppState {
     activeTab: 'aim',
     isRangeSelectMode: false,
     watcher: {
-      status: 'unbound', rootName: null, mode: null, lastScanAt: null, error: null, dbEntries: null,
-      songsAvailable: false, songsNeedsAuth: null, songsScan: null, baselineCount: 0, failedCount: 0, restorable: null,
+      status: 'unbound', rootName: null, mode: null, detection: null, lastScanAt: null, error: null, dbEntries: null,
+      songsAvailable: false, songsNeedsAuth: null, songsScan: null, localReplays: 0, restorable: null,
     },
+    browser: { tab: 'loaded', query: '', recent: [], recentTotal: 0, results: [], resultTotal: 0 },
+    preview: { key: null, loading: false, total: null, loaded: 0, error: null },
     importLog: [],
   };
 }
@@ -90,7 +139,7 @@ export function resetState(): void {
   Object.assign(state, initialState());
 }
 
-export type Topic = 'groups' | 'selection' | 'scope' | 'time' | 'view' | 'tab' | 'playback' | 'watcher' | 'importLog';
+export type Topic = 'groups' | 'selection' | 'scope' | 'time' | 'view' | 'tab' | 'playback' | 'watcher' | 'browser' | 'preview' | 'importLog';
 
 type Listener = (topics: Set<Topic>) => void;
 const listeners: Listener[] = [];

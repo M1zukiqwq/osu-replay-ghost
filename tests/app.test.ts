@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  clearDemoData, quickSelect, seek, selectSlice, setActiveBeatmap, setPrimary, setScope, setSliceDuration, toggleReplay,
+  adjustScope, clearDemoData, drillScope, popScope, quickSelect, seek, selectSlice, setActiveBeatmap, setPrimary, setScope,
+  setSliceDuration, toggleReplay,
 } from '../src/app/actions';
 import { loadDemo, simulateNewPlay } from '../src/app/demo';
 import { createDirectEngine } from '../src/app/engine';
@@ -10,7 +11,7 @@ import { fileMapSongsSource, Library } from '../src/app/library';
 import { getActiveGroup, getPrimaryReplay, getSelectedReplays, isAnalyzable, resetState, state } from '../src/app/state';
 import { parseOsu } from '../src/core/formats/osu';
 import { mulberry32 } from '../src/core/demo/prng';
-import { fixture, fixtureFile, osuText } from './helpers';
+import { dbEntry, fixture, fixtureFile, osuText } from './helpers';
 
 const engine = createDirectEngine();
 let ctx: ImportContext;
@@ -124,10 +125,7 @@ describe('import pipeline', () => {
   });
 
   it('resolves replays through osu!.db + Songs without importing the .osu manually [B1]', async () => {
-    ctx.library.setDbIndex([{
-      md5: FIXTURE_MD5, folder: '999 Fixture', fileName: 'fixture.osu', beatmapId: null, beatmapSetId: null,
-      artist: '', title: '', version: '', mode: 0, modifiedAt: null,
-    }]);
+    ctx.library.setDbIndex([dbEntry({ md5: FIXTURE_MD5, folder: '999 Fixture', fileName: 'fixture.osu' })]);
     ctx.library.songs = fileMapSongsSource(new Map([['999 fixture/fixture.osu', fixtureFile('fixture_map.osu')]]));
     const out = await importFiles([fixtureFile('replay_hr.osr')], ctx, 'test');
     expect(out.report.items[0].status).toBe('ok');
@@ -175,6 +173,27 @@ describe('state actions and invariants [B18 B27]', () => {
       else for (const id of ids) toggleReplay(id, false);
       checkInvariants();
     }
+  });
+
+  it('detail-bar drill-down keeps a scope history that any other scope change resets', async () => {
+    await loadDemo(engine);
+    expect(state.scope).toMatchObject({ type: 'slice', startMs: 4000, endMs: 6000 });
+    drillScope({ type: 'custom', startMs: 4500, endMs: 5500 });
+    adjustScope({ type: 'custom', startMs: 4400, endMs: 5500 });
+    drillScope({ type: 'custom', startMs: 4600, endMs: 4650 });
+    expect(state.scope).toMatchObject({ startMs: 4600, endMs: 4800 }); // custom scopes stay >= 200 ms
+    expect(state.scopeHistory).toHaveLength(2);
+    expect(popScope()).toBe(true);
+    expect(state.scope).toMatchObject({ startMs: 4400, endMs: 5500 });
+    expect(popScope()).toBe(true);
+    expect(state.scope).toMatchObject({ type: 'slice', sliceIndex: 2, startMs: 4000, endMs: 6000 });
+    expect(popScope()).toBe(false);
+    drillScope({ type: 'custom', startMs: 4500, endMs: 5500 });
+    selectSlice(0);
+    expect(state.scopeHistory).toHaveLength(0);
+    drillScope({ type: 'custom', startMs: 500, endMs: 900 });
+    setActiveBeatmap(state.groups[1].key);
+    expect(state.scopeHistory).toHaveLength(0);
   });
 
   it('cannot deselect the last replay of the active map even if other maps have selections', async () => {

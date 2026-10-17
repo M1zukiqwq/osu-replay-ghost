@@ -75,6 +75,31 @@ export function parseOsr(bytes: Uint8Array): OsrFile {
   };
 }
 
+export interface OsrPeek { mode: number; gameVersion: number; beatmapMd5: string; playerName: string }
+
+/** Bytes that always cover mode, version, beatmap MD5 and a typical player name. */
+export const OSR_PEEK_BYTES = 128;
+
+/** Reads only the leading header fields (enough to match a replay to a beatmap); null when unreadable. */
+export function peekOsrHeader(bytes: Uint8Array): OsrPeek | null {
+  const r = new BinaryReader(bytes);
+  try {
+    const mode = r.u8();
+    const gameVersion = r.i32();
+    const beatmapMd5 = r.string().toLowerCase();
+    if (!/^[0-9a-f]{32}$/.test(beatmapMd5)) return null;
+    let playerName = '';
+    try {
+      playerName = r.string();
+    } catch {
+      // name cut off by the peek window
+    }
+    return { mode, gameVersion, beatmapMd5, playerName };
+  } catch {
+    return null;
+  }
+}
+
 /** Parses "w|x|y|z,..." into raw frames, dropping the trailing RNG seed frame. */
 export function parseFrameString(text: string): RawFrame[] {
   const out: RawFrame[] = [];

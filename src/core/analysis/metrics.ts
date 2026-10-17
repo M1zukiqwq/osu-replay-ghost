@@ -51,7 +51,9 @@ export function scopedPresses(a: ReplayAnalysis, scope: Pick<Scope, 'startMs' | 
 }
 
 export const isEffective = (j: Judgment) => j.judgment !== 'SKIP';
-export const isHit = (j: Judgment) => j.pressed && j.judgment !== 'MISS' && j.judgment !== 'SKIP';
+/** A timed hit on the circle / slider head (an early-missed slider head does not count even if the body scored). */
+export const isHit = (j: Judgment) => j.pressed && j.judgment !== 'MISS' && j.judgment !== 'SKIP' && (j.slider === null || j.slider.headHit);
+export const isSliderBreak = (j: Judgment) => j.slider !== null && j.slider.break !== null;
 
 export function mean(values: number[]): number | null {
   if (values.length === 0) return null;
@@ -74,7 +76,7 @@ export function altPercent(presses: KeyPress[]): number | null {
   return alternate + single > 0 ? (alternate / (alternate + single)) * 100 : null;
 }
 
-export interface ReplayRow { id: string; k1: number; k2: number; altPct: number | null; miss: number; meanDeviation: number | null }
+export interface ReplayRow { id: string; k1: number; k2: number; altPct: number | null; miss: number; sliderBreaks: number; meanDeviation: number | null }
 
 export interface PrimaryMetrics {
   ur: number | null;
@@ -97,6 +99,9 @@ export interface ScopeMetrics {
   kps: number | null;
   missCount: number;
   missReason: string;
+  sliderBreakCount: number;
+  /** Reason of the primary's first slider break, a fallback when only other replays broke, or ''. */
+  sliderBreakReason: string;
   meanDeviation: number | null;
   overaimPct: number | null;
   underaimPct: number | null;
@@ -108,6 +113,7 @@ export interface ScopeMetrics {
 
 export const MISS_REASON_OTHERS = '其他回放有 Miss';
 export const MISS_REASON_NONE = '无失误';
+export const BREAK_REASON_OTHERS = '其他回放有断连';
 
 export function computePrimaryMetrics(rep: AnalyzedReplay, scope: Pick<Scope, 'startMs' | 'endMs'>, d: number): PrimaryMetrics {
   const judg = scopedJudgments(rep.analysis, scope, d);
@@ -147,7 +153,9 @@ export function computeScopeMetrics(
   let effectiveCount = 0;
   let over = 0;
   let under = 0;
+  let breakCount = 0;
   let primaryFirstMiss: Judgment | null = null;
+  let primaryFirstBreak: Judgment | null = null;
   const rows: ReplayRow[] = [];
   const radar: RadarPoint[] = [];
 
@@ -158,8 +166,10 @@ export function computeScopeMetrics(
     let rk2 = 0;
     for (const p of presses) p.key === 'K1' ? rk1++ : rk2++;
     let rMiss = 0;
+    let rBreaks = 0;
     let rDev = 0;
     let rEff = 0;
+    const isPrimary = !!primary && rep.id === primary.id;
     for (const j of judg) {
       if (!isEffective(j)) continue;
       rEff++;
@@ -168,7 +178,11 @@ export function computeScopeMetrics(
       if (j.isUnderaim) under++;
       if (j.judgment === 'MISS') {
         rMiss++;
-        if (primary && rep.id === primary.id && !primaryFirstMiss) primaryFirstMiss = j;
+        if (isPrimary && !primaryFirstMiss) primaryFirstMiss = j;
+      }
+      if (isSliderBreak(j)) {
+        rBreaks++;
+        if (isPrimary && !primaryFirstBreak) primaryFirstBreak = j;
       }
       if (j.lateralOffset !== null && j.longitudinalOffset !== null) {
         radar.push({ replayId: rep.id, lateral: j.lateralOffset, longitudinal: j.longitudinalOffset, miss: j.judgment === 'MISS' });
@@ -177,9 +191,10 @@ export function computeScopeMetrics(
     k1 += rk1;
     k2 += rk2;
     missCount += rMiss;
+    breakCount += rBreaks;
     devSum += rDev;
     effectiveCount += rEff;
-    rows.push({ id: rep.id, k1: rk1, k2: rk2, altPct: altPercent(presses), miss: rMiss, meanDeviation: rEff ? rDev / rEff : null });
+    rows.push({ id: rep.id, k1: rk1, k2: rk2, altPct: altPercent(presses), miss: rMiss, sliderBreaks: rBreaks, meanDeviation: rEff ? rDev / rEff : null });
   }
 
   const total = k1 + k2;
@@ -187,6 +202,9 @@ export function computeScopeMetrics(
   let missReason: string = MISS_REASON_NONE;
   if (primaryFirstMiss) missReason = (primaryFirstMiss as Judgment).missReason;
   else if (missCount > 0) missReason = MISS_REASON_OTHERS;
+  let sliderBreakReason = '';
+  if (primaryFirstBreak) sliderBreakReason = (primaryFirstBreak as Judgment).slider!.break!.reason;
+  else if (breakCount > 0) sliderBreakReason = BREAK_REASON_OTHERS;
 
   return {
     k1,
@@ -196,6 +214,8 @@ export function computeScopeMetrics(
     kps: selected.length && seconds > 0 ? total / selected.length / seconds : null,
     missCount,
     missReason,
+    sliderBreakCount: breakCount,
+    sliderBreakReason,
     meanDeviation: effectiveCount ? devSum / effectiveCount : null,
     overaimPct: effectiveCount ? (over / effectiveCount) * 100 : null,
     underaimPct: effectiveCount ? (under / effectiveCount) * 100 : null,

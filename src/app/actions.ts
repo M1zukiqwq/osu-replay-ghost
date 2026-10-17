@@ -41,17 +41,18 @@ export function setActiveBeatmap(key: string, force = false): void {
   state.selectedIds = new Set(analyzableIds(g));
   state.primaryId = analyzableIds(g)[0] ?? null;
   state.scope = fullScope(g.beatmap.durationMs);
+  state.scopeHistory = [];
   state.currentTimeMs = 0;
   state.isPlaying = false;
   state.isRangeSelectMode = false;
   notify('groups', 'selection', 'scope', 'time', 'playback', 'view');
 }
 
-export function addBeatmaps(maps: Beatmap[]): Group[] {
+export function addBeatmaps(maps: Beatmap[], transient = false): Group[] {
   const created: Group[] = [];
   for (const b of maps) {
     if (state.groups.some((g) => g.key === b.md5)) continue;
-    const g: Group = { key: b.md5, beatmap: b, replays: [], nextColorIdx: 0 };
+    const g: Group = { key: b.md5, beatmap: b, replays: [], nextColorIdx: 0, transient };
     state.groups.unshift(g);
     created.push(g);
   }
@@ -59,12 +60,22 @@ export function addBeatmaps(maps: Beatmap[]): Group[] {
   return created;
 }
 
+/** Drops loaded groups (and their replays) and restores the selection invariants. */
+export function removeGroups(keys: Set<string>): void {
+  if (!state.groups.some((g) => keys.has(g.key))) return;
+  state.groups = state.groups.filter((g) => !keys.has(g.key));
+  if (state.activeKey && keys.has(state.activeKey)) state.activeKey = null;
+  normalize();
+  notify('groups', 'selection', 'scope', 'time');
+}
+
 /**
  * Adds replays to their beatmap groups (§7 addReplays). The active beatmap becomes the group of the
  * last added replay: if that is a different group only the new replays are selected, otherwise they
  * are added to the current selection. The newest new replay becomes the primary.
+ * With `select = false` (paging in older local replays) the selection and active map are left alone.
  */
-export function addReplays(list: Replay[]): void {
+export function addReplays(list: Replay[], select = true): void {
   if (list.length === 0) return;
   for (const r of list) {
     const g = state.groups.find((x) => x.key === r.beatmapMd5);
@@ -72,6 +83,11 @@ export function addReplays(list: Replay[]): void {
     r.colorIdx = g.nextColorIdx++;
     g.replays.push(r);
     g.replays.sort(byNewest);
+  }
+  if (!select) {
+    normalize();
+    notify('groups', 'selection');
+    return;
   }
   const target = list[list.length - 1].beatmapMd5;
   const g = state.groups.find((x) => x.key === target)!;
@@ -148,9 +164,36 @@ export function quickSelect(kind: QuickSelectKind): ActionResult {
   return { ok: true };
 }
 
+/** Default view of a freshly opened map: newest vs best accuracy (or everything when there are ≤ 2). */
+export function selectDefaultReplays(): void {
+  const g = getActiveGroup();
+  if (!g) return;
+  if (g.replays.filter(isAnalyzable).length > 2) quickSelect('bestVsLatest');
+  else quickSelect('all');
+}
+
 export function setScope(scope: Scope): void {
+  state.scopeHistory = [];
+  adjustScope(scope);
+}
+
+/** Changes the scope but keeps the drill-down history (fine-tuning the current level). */
+export function adjustScope(scope: Scope): void {
   state.scope = clampScope(scope, getDurationMs());
   notify('scope');
+}
+
+/** Narrows into a sub-range from the detail bar; the current scope can be restored with popScope. */
+export function drillScope(scope: Scope): void {
+  state.scopeHistory.push(state.scope);
+  adjustScope(scope);
+}
+
+export function popScope(): boolean {
+  const parent = state.scopeHistory.pop();
+  if (!parent) return false;
+  adjustScope(parent);
+  return true;
 }
 
 export function seek(t: number): void {
@@ -178,7 +221,7 @@ export function jumpToWorstSlice(): boolean {
   const worst = worstSlice(computeSlices(g.beatmap, getSelectedReplays(), state.sliceDurationMs));
   if (!worst) return false;
   selectSlice(worst.index);
-  return worst.misses > 0;
+  return worst.misses + worst.sliderBreaks > 0;
 }
 
 /** Moves the analysis scope to the slice containing t when t is outside the current scope (D8). */
@@ -264,6 +307,16 @@ export function clearDemoData(): void {
 export function updateWatcher(patch: Partial<typeof state.watcher>): void {
   Object.assign(state.watcher, patch);
   notify('watcher');
+}
+
+export function updateBrowser(patch: Partial<typeof state.browser>): void {
+  Object.assign(state.browser, patch);
+  notify('browser');
+}
+
+export function updatePreview(patch: Partial<typeof state.preview>): void {
+  Object.assign(state.preview, patch);
+  notify('preview');
 }
 
 /** Advance used by the playback loop only (does not count as a seek). */

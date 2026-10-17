@@ -1,6 +1,7 @@
 import { advanceTime, ensureTimeInScope, seek, setLayer, setPlaying, setSpeed } from '../app/actions';
 import { getDurationMs, getPrimaryReplay, state } from '../app/state';
 import { frameIndexAt } from '../core/replay/frames';
+import type { Judgment } from '../core/types';
 import { playHitsound, warmUpAudio } from './audio';
 import { $ } from './dom';
 import { showToast } from './toast';
@@ -44,21 +45,58 @@ export function resetPlaybackClock(): void {
   lastTs = 0;
 }
 
+/** First index with key(arr[i]) > t. */
+function upperBy<T>(arr: T[], t: number, key: (v: T) => number): number {
+  let lo = 0;
+  let hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (key(arr[mid]) <= t) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** Times the primary can jump between: misses at the note, slider breaks where the combo broke. */
+const problemCache = new WeakMap<Judgment[], number[]>();
+
+function problemTimes(judgments: Judgment[]): number[] {
+  let list = problemCache.get(judgments);
+  if (!list) {
+    list = [];
+    for (const j of judgments) {
+      if (j.judgment === 'MISS') list.push(j.noteTime);
+      else if (j.slider?.break) list.push(j.slider.break.time);
+    }
+    list.sort((a, b) => a - b);
+    problemCache.set(judgments, list);
+  }
+  return list;
+}
+
+/** Slider breaks after the head (ticks / repeats), sorted, for the combo-break sound. */
+const bodyBreakCache = new WeakMap<Judgment[], number[]>();
+
+function bodyBreakTimes(judgments: Judgment[]): number[] {
+  let list = bodyBreakCache.get(judgments);
+  if (!list) {
+    list = judgments.filter((j) => j.slider?.break && j.slider.headHit).map((j) => j.slider!.break!.time).sort((a, b) => a - b);
+    bodyBreakCache.set(judgments, list);
+  }
+  return list;
+}
+
 function triggerHitsounds(from: number, to: number): void {
   const pri = getPrimaryReplay();
   if (!pri || !state.audioEnabled || to <= from) return;
   const js = pri.analysis.judgments;
-  let lo = 0;
-  let hi = js.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (js[mid].noteTime <= from) lo = mid + 1;
-    else hi = mid;
+  for (let i = upperBy(js, from, (j) => j.noteTime); i < js.length && js[i].noteTime <= to; i++) {
+    const j = js[i];
+    if (j.judgment === 'SKIP') continue;
+    playHitsound(j.judgment === 'MISS' || (j.slider !== null && !j.slider.headHit), j.keyUsed === 'K2');
   }
-  for (let i = lo; i < js.length && js[i].noteTime <= to; i++) {
-    if (js[i].judgment === 'SKIP') continue;
-    playHitsound(js[i].judgment === 'MISS', js[i].keyUsed === 'K2');
-  }
+  const breaks = bodyBreakTimes(js);
+  for (let i = upperBy(breaks, from, (v) => v); i < breaks.length && breaks[i] <= to; i++) playHitsound(true, false);
 }
 
 /** ±n frames on the primary replay's real frames; falls back to 16 ms steps without frames (B20). */
@@ -82,7 +120,7 @@ export function stepFrames(n: number): void {
   seek(frames[target].time);
 }
 
-/** Jumps to the primary replay's previous/next miss, wrapping around; switches scope if needed (D8). */
+/** Jumps to the primary replay's previous/next miss or slider break, wrapping around; switches scope if needed (D8). */
 export function jumpToMiss(dir: 1 | -1): void {
   setPlaying(false);
   const pri = getPrimaryReplay();
@@ -90,17 +128,17 @@ export function jumpToMiss(dir: 1 | -1): void {
     showToast('没有主视角回放', '请先勾选一条有轨迹数据的回放', 'cyan');
     return;
   }
-  const misses = pri.analysis.judgments.filter((j) => j.judgment === 'MISS');
-  if (!misses.length) {
-    showToast('当前主视角无 Miss', '该 Replay 在模拟判定中没有 Miss', 'emerald');
+  const times = problemTimes(pri.analysis.judgments);
+  if (!times.length) {
+    showToast('当前主视角无 Miss', '该 Replay 在模拟判定中没有 Miss，也没有滑条断连', 'emerald');
     return;
   }
   const t = state.currentTimeMs;
   const target = dir > 0
-    ? misses.find((m) => m.noteTime > t + 1) ?? misses[0]
-    : [...misses].reverse().find((m) => m.noteTime < t - 1) ?? misses[misses.length - 1];
-  ensureTimeInScope(target.noteTime);
-  seek(target.noteTime);
+    ? times.find((v) => v > t + 1) ?? times[0]
+    : [...times].reverse().find((v) => v < t - 1) ?? times[times.length - 1];
+  ensureTimeInScope(target);
+  seek(target);
 }
 
 const SPEED_ON = 'speed-btn px-1.5 py-0.5 rounded bg-pink-500/20 text-pink-300 border border-pink-500/40 font-mono font-bold';

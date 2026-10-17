@@ -58,11 +58,18 @@ const isOsuDb = (name: string) => name.toLowerCase() === 'osu!.db';
 
 export interface ImportOutcome { report: ImportReport; statusByFile: Map<File, ImportStatus> }
 
+export interface ImportOptions {
+  /** Groups created by this batch may be evicted later (beatmap browser); default false. */
+  transient?: boolean;
+  /** Select / switch to the imported replays (default true); false when paging in older replays. */
+  select?: boolean;
+}
+
 let queue: Promise<unknown> = Promise.resolve();
 
-/** Serialises imports (manual, drag & drop, watcher) so batches never interleave. */
-export function importFiles(files: File[], ctx: ImportContext, origin: string): Promise<ImportOutcome> {
-  const run = queue.then(() => doImport(files, ctx, origin));
+/** Serialises imports (manual, drag & drop, local replay loading) so batches never interleave. */
+export function importFiles(files: File[], ctx: ImportContext, origin: string, opts: ImportOptions = {}): Promise<ImportOutcome> {
+  const run = queue.then(() => doImport(files, ctx, origin, opts));
   queue = run.catch(() => undefined);
   return run;
 }
@@ -90,7 +97,7 @@ async function makeResolver(ctx: ImportContext, batchMaps: Beatmap[]) {
   };
 }
 
-async function doImport(files: File[], ctx: ImportContext, origin: string): Promise<ImportOutcome> {
+async function doImport(files: File[], ctx: ImportContext, origin: string, opts: ImportOptions): Promise<ImportOutcome> {
   const items: ImportItem[] = [];
   const statusByFile = new Map<File, ImportStatus>();
   const record = (f: File, status: ImportStatus, detail: string) => {
@@ -190,18 +197,24 @@ async function doImport(files: File[], ctx: ImportContext, origin: string): Prom
     }
   }
 
-  commitBatch(batchMaps, resolved, pending, attachedIds, mapsFromFiles);
+  for (const m of mapsFromFiles) ctx.library.remember(m);
+  commitBatch(batchMaps, resolved, pending, attachedIds, mapsFromFiles, opts);
   const report: ImportReport = { at: Date.now(), origin, items };
   if (items.length) logImport(report);
   return { report, statusByFile };
 }
 
-function commitBatch(maps: Beatmap[], resolved: Replay[], pending: Replay[], attachedIds: Set<string>, mapsFromFiles: Beatmap[]): void {
+function commitBatch(
+  maps: Beatmap[], resolved: Replay[], pending: Replay[], attachedIds: Set<string>, mapsFromFiles: Beatmap[], opts: ImportOptions,
+): void {
+  const transient = opts.transient ?? false;
   const neededMaps = maps.filter((m) => mapsFromFiles.includes(m) || resolved.some((r) => r.beatmapMd5 === m.md5));
-  addBeatmaps(neededMaps);
+  addBeatmaps(neededMaps, transient);
+  // Anything brought in by hand is kept, even if its map was first opened from the browser.
+  if (!transient) for (const g of state.groups) if (resolved.some((r) => r.beatmapMd5 === g.key)) g.transient = false;
   if (attachedIds.size) removePending(attachedIds);
   addPending(pending);
-  if (resolved.length) addReplays(resolved);
+  if (resolved.length) addReplays(resolved, opts.select ?? true);
   else if (mapsFromFiles.length) setActiveBeatmap(mapsFromFiles[mapsFromFiles.length - 1].md5);
 }
 

@@ -153,6 +153,7 @@ const base = (o: Partial<SynthConfig> & { seed: number }): SynthConfig => ({
   mods: 0,
   missWindows: [],
   chokeMissProb: 0,
+  sliderBreakWindows: [],
   aimBiasLong: 0,
   aimSpread: 12,
   timingBias: 0,
@@ -168,7 +169,7 @@ const base = (o: Partial<SynthConfig> & { seed: number }): SynthConfig => ({
 export const DEMO_REPLAYS: DemoReplaySpec[] = [
   {
     id: 'rep_fd_1', mapKey: 'fd', playerName: 'LocalPlayer (最新 #1 · Overaim 失误)', minutesAgo: 10, totalScore: 942180,
-    synth: base({ seed: 11, missWindows: [[4000, 5950], [8800, 9900]], chokeMissProb: 0.45, aimBiasLong: 0.34, aimSpread: 18,
+    synth: base({ seed: 11, missWindows: [[4000, 5950], [8800, 9900]], chokeMissProb: 0.45, sliderBreakWindows: [[6200, 6300]], aimBiasLong: 0.34, aimSpread: 18,
       timingBias: -4.5, timingSpread: 18, baseHoldMs: 44, altPreference: 0.92, snapExponent: 1.35, arcAmplitude: 14 }),
   },
   {
@@ -183,7 +184,7 @@ export const DEMO_REPLAYS: DemoReplaySpec[] = [
   },
   {
     id: 'rep_bz_1', mapKey: 'bz', playerName: 'LocalPlayer (6s-8s 大间距流断连)', minutesAgo: 86, totalScore: 812500,
-    synth: base({ seed: 44, mods: MOD.HR, missWindows: [[6100, 7900]], chokeMissProb: 0.42, aimBiasLong: -0.32, aimSpread: 17,
+    synth: base({ seed: 44, mods: MOD.HR, missWindows: [[6100, 7900]], chokeMissProb: 0.42, sliderBreakWindows: [[8200, 8300]], aimBiasLong: -0.32, aimSpread: 17,
       timingBias: 5.4, timingSpread: 19, baseHoldMs: 52, altPreference: 0.88, dominantKey: 'K2', snapExponent: 1.05, arcAmplitude: 12 }),
   },
   {
@@ -201,7 +202,7 @@ export function liveRunConfig(runNumber: number, seed: number, durationMs: numbe
   const over = runNumber % 2 === 0;
   const w = (f: number): [number, number] => [Math.round(durationMs * f), Math.round(durationMs * f) + 2000];
   return base({
-    seed, missWindows: [w(0.33), w(0.67)], chokeMissProb: 0.35, aimBiasLong: over ? 0.38 : -0.35, aimSpread: 17.5,
+    seed, missWindows: [w(0.33), w(0.67)], chokeMissProb: 0.35, sliderBreakWindows: [w(0.5)], aimBiasLong: over ? 0.38 : -0.35, aimSpread: 17.5,
     timingBias: over ? -5.2 : 6.1, timingSpread: 19, baseHoldMs: 47, altPreference: 0.86, snapExponent: 1.25, arcAmplitude: over ? 15 : -13,
   });
 }

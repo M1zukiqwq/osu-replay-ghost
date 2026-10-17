@@ -60,12 +60,18 @@ export function parseCurve(token: string, head: Vec2): { type: CurveType; points
   return { type, points };
 }
 
+export interface SliderSettings { sliderMultiplier: number; tickRate: number; formatVersion: number }
+
+/** Tick spacing as in osu!: 100 × SliderMultiplier × SV / TickRate; maps before v8 ignore SV here. */
+export function tickDistanceFor(s: SliderSettings, sv: number): number {
+  if (!(s.tickRate > 0)) return Infinity;
+  const scoringDistance = 100 * s.sliderMultiplier * sv;
+  return (scoringDistance / s.tickRate) * (s.formatVersion < 8 ? 1 / sv : 1);
+}
+
 /** Builds fully-resolved hit objects (slider paths, end positions, combo numbers). */
-export function buildHitObjects(
-  raw: RawObject[],
-  timing: TimingLookup,
-  sliderMultiplier: number,
-): HitObject[] {
+export function buildHitObjects(raw: RawObject[], timing: TimingLookup, settings: SliderSettings): HitObject[] {
+  const { sliderMultiplier } = settings;
   const objects: HitObject[] = [];
   let comboNumber = 1;
   let comboColorIdx = 0;
@@ -105,7 +111,8 @@ export function buildHitObjects(
       const slides = Math.max(1, Math.round(num(r.parts[6], 1)));
       const length = Math.max(0, num(r.parts[7], 0));
       const { path, cumulative } = computeSliderPath(curve.type, curve.points, length);
-      const spanDuration = spanDurationFor(length, sliderMultiplier, timing.at(r.time));
+      const timingState = timing.at(r.time);
+      const spanDuration = spanDurationFor(length, sliderMultiplier, timingState);
       const endProgress = sliderProgressAt(r.time + spanDuration * slides, r.time, spanDuration, slides);
       const total = cumulative[cumulative.length - 1];
       const end = positionAtDistance(path, cumulative, endProgress * total);
@@ -120,6 +127,7 @@ export function buildHitObjects(
         cumulative,
         endX: end.x,
         endY: end.y,
+        tickDistance: tickDistanceFor(settings, timingState.sv),
       };
     }
     objects.push(obj);
@@ -134,9 +142,11 @@ export function parseOsu(bytes: Uint8Array, opts: ParseOsuOptions = {}): Beatmap
   const md5 = md5Bytes(bytes);
   let text = new TextDecoder('utf-8').decode(bytes);
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-  if (!/^\s*osu file format v\d+/.test(text)) {
+  const header = /^\s*osu file format v(\d+)/.exec(text);
+  if (!header) {
     throw new OsuParseError('不是有效的 .osu 文件（缺少 “osu file format” 文件头）');
   }
+  const formatVersion = parseInt(header[1], 10);
 
   const general: Record<string, string> = {};
   const metadata: Record<string, string> = {};
@@ -184,8 +194,9 @@ export function parseOsu(bytes: Uint8Array, opts: ParseOsuOptions = {}): Beatmap
 
   const od = num(difficulty.OverallDifficulty, 5);
   const sliderMultiplier = num(difficulty.SliderMultiplier, 1.4) || 1.4;
+  const sliderTickRate = num(difficulty.SliderTickRate, 1);
   const timing = new TimingLookup(timingPoints);
-  const hitObjects = buildHitObjects(rawObjects, timing, sliderMultiplier);
+  const hitObjects = buildHitObjects(rawObjects, timing, { sliderMultiplier, tickRate: sliderTickRate, formatVersion });
   const firstRed = timingPoints.find((t) => t.uninherited && t.beatLength > 0);
 
   const title = metadata.Title ?? '';
@@ -207,7 +218,7 @@ export function parseOsu(bytes: Uint8Array, opts: ParseOsuOptions = {}): Beatmap
     od,
     ar: num(difficulty.ApproachRate, od),
     sliderMultiplier,
-    sliderTickRate: num(difficulty.SliderTickRate, 1),
+    sliderTickRate,
     stackLeniency: num(general.StackLeniency, 0.7),
     bpm: firstRed ? 60000 / firstRed.beatLength : null,
     timingPoints,
